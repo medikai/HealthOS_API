@@ -1,15 +1,15 @@
 services:
   web:
     build: 
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: scripts/production_with_nginx/Dockerfile
     # -------- Both of the following commands should be commented to run with nginx --------
 
     # -------- replace with comment to run with gunicorn --------
     # command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     command: gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
     env_file:
-      - ./src/.env
+      - ../../src/.env
     # -------- replace ports with expose if you are using nginx --------
     # ports:
     #    - "8000:8000"
@@ -19,27 +19,27 @@ services:
       - db
       - redis
     volumes:
-      - ./src/app:/code/app
-      - ./src/.env:/code/.env
+      - ../../src/app:/code/app
+      - ../../src/.env:/code/.env
 
   worker:
     build: 
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: scripts/production_with_nginx/Dockerfile
     command: arq app.core.worker.settings.WorkerSettings
     env_file:
-      - ./src/.env
+      - ../../src/.env
     depends_on:
       - db
       - redis
     volumes:
-      - ./src/app:/code/app
-      - ./src/.env:/code/.env
+      - ../../src/app:/code/app
+      - ../../src/.env:/code/.env
 
   db:
     image: postgres:13
     env_file:
-      - ./src/.env
+      - ../../src/.env
     volumes:
       - postgres-data:/var/lib/postgresql/data
     expose:
@@ -58,52 +58,52 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./default.conf:/etc/nginx/conf.d/default.conf
+      - ../../default.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - web
 
   #-------- uncomment to create first superuser --------
   # create_superuser:
   #   build: 
-  #     context: .
-  #     dockerfile: Dockerfile
+  #     context: ../..
+  #     dockerfile: scripts/production_with_nginx/Dockerfile
   #   env_file:
-  #     - ./src/.env
+  #     - ../../src/.env
   #   depends_on:
   #     - db
   #     - web
   #   command: python -m src.scripts.create_first_superuser
   #   volumes:
-  #     - ./src:/code/src
+  #     - ../../src:/code/src
 
   #-------- uncomment to run tests --------
   # pytest:
   #   build: 
-  #     context: .
-  #     dockerfile: Dockerfile 
+  #     context: ../..
+  #     dockerfile: scripts/production_with_nginx/Dockerfile
   #   env_file:
-  #     - ./src/.env
+  #     - ../../src/.env
   #   depends_on:
   #     - web
   #     - redis
   #   command: python -m pytest ./tests
   #   volumes:
-  #     - .:/code
+  #     - ../..:/code
 
   #-------- uncomment to create first tier --------
   # create_tier:
   #   build: 
-  #     context: .
-  #     dockerfile: Dockerfile
+  #     context: ../..
+  #     dockerfile: scripts/production_with_nginx/Dockerfile
   #   env_file:
-  #     - ./src/.env
+  #     - ../../src/.env
   #   depends_on:
   #     - create_superuser
   #     - db
   #     - web
   #   command: python -m src.scripts.create_first_tier
   #   volumes:
-  #     - ./src:/code/src
+  #     - ../../src:/code/src
 
 volumes:
   postgres-data:
