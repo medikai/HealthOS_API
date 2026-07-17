@@ -13,10 +13,7 @@ from sqlalchemy.orm.session import Session
 from src.app.core.config import settings
 from src.app.main import app
 
-DATABASE_URI = settings.POSTGRES_URI
-DATABASE_PREFIX = settings.POSTGRES_SYNC_PREFIX
-
-sync_engine = create_engine(DATABASE_PREFIX + DATABASE_URI)
+sync_engine = create_engine(settings.POSTGRES_SYNC_URL)
 local_session = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
 
 

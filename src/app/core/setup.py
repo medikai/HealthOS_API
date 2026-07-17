@@ -15,6 +15,7 @@ from fastapi.openapi.utils import get_openapi
 from ..api.dependencies import get_current_superuser
 from ..core.utils.rate_limit import rate_limiter
 from ..middleware.client_cache_middleware import ClientCacheMiddleware
+from ..middleware.csrf_middleware import CSRFMiddleware
 from ..middleware.logger_middleware import LoggerMiddleware
 from ..models import *  # noqa: F403
 from .config import (
@@ -221,6 +222,7 @@ def create_application(
             allow_headers=settings.CORS_HEADERS,
         )
     application.add_middleware(LoggerMiddleware)
+    application.add_middleware(CSRFMiddleware)
     if isinstance(settings, EnvironmentSettings):
         if settings.ENVIRONMENT != EnvironmentOption.PRODUCTION:
             docs_router = APIRouter()

@@ -177,3 +177,34 @@ With these basic settings configured, you can start the application:
 - **Manual**: `uv run uvicorn src.app.main:app --reload`
 
 For detailed configuration options, advanced settings, and production deployment, see the [User Guide - Configuration](../user-guide/configuration/index.md).
+
+## Logto backend-for-frontend authentication
+
+HealthOS uses Logto as a confidential traditional-web OIDC client. React does not receive Logto tokens; it only follows the browser redirect and uses the HealthOS session cookie.
+
+In Logto, create a **Traditional web** application and register the following local URLs:
+
+```text
+Redirect URI: http://localhost:8000/api/v1/auth/callback
+Post sign-out redirect URI: http://localhost:5173/
+```
+
+Add the application ID and secret to `src/.env`. Do not commit the secret or add it to a React environment file.
+
+```env
+LOGTO_ENABLED=true
+LOGTO_ENDPOINT=https://your-tenant.logto.app
+LOGTO_APP_ID=your-traditional-web-app-id
+LOGTO_APP_SECRET=your-traditional-web-app-secret
+LOGTO_REDIRECT_URI=http://localhost:8000/api/v1/auth/callback
+LOGTO_POST_LOGOUT_REDIRECT_URI=http://localhost:5173/
+AUTH_POST_LOGIN_REDIRECT_URI=http://localhost:5173/
+AUTH_COOKIE_SECURE=false
+AUTH_COOKIE_SAMESITE=lax
+```
+
+For production, use HTTPS, set `AUTH_COOKIE_SECURE=true`, and use exact production URLs. Set `AUTH_COOKIE_SAMESITE=none` only when the frontend and API are genuinely cross-site.
+
+Set exact frontend origins in `CORS_ORIGINS` and include `X-CSRF-Token` in `CORS_HEADERS`; do not use a wildcard origin with credentialed browser requests.
+
+The frontend redirects the browser (not `fetch`) to `GET /api/v1/auth/login`, calls `GET /api/v1/auth/me` with `credentials: "include"` after the callback, and sends the returned CSRF token in the `X-CSRF-Token` header on every state-changing request. To log out, it calls `POST /api/v1/auth/logout` and redirects the browser to the returned `logout_url`.

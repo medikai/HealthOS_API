@@ -145,4 +145,6 @@ src/.env
 
 # Don't ignore files inside of script folder:
 !scripts/*
+docs/
+AGENTS.md
 
