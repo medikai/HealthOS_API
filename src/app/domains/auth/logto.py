@@ -76,9 +76,20 @@ class LogtoOidcClient:
         if self._configuration is not None:
             return self._configuration
         endpoint = self._required("LOGTO_ENDPOINT", settings.LOGTO_ENDPOINT).rstrip("/")
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{endpoint}/oidc/.well-known/openid-configuration")
-            response.raise_for_status()
+        discovery_url = (
+            f"{endpoint}/.well-known/openid-configuration"
+            if endpoint.endswith("/oidc")
+            else f"{endpoint}/oidc/.well-known/openid-configuration"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(discovery_url)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to retrieve Logto's OpenID Connect configuration.",
+            ) from exc
         payload = response.json()
         try:
             self._configuration = OidcConfiguration(

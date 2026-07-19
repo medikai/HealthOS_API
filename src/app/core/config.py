@@ -141,7 +141,9 @@ class LogtoSettings(BaseSettings):
     LOGTO_REDIRECT_URI: str | None = None
     LOGTO_POST_LOGOUT_REDIRECT_URI: str | None = None
     AUTH_POST_LOGIN_REDIRECT_URI: str | None = None
-    LOGTO_SCOPES: list[str] = ["openid", "profile", "email", "offline_access"]
+    # Request the minimum required claim set. Add profile/email only after enabling
+    # those user-data permissions for the Logto application.
+    LOGTO_SCOPES: list[str] = ["openid"]
 
     AUTH_SESSION_COOKIE_NAME: str = "healthos_session"
     AUTH_SESSION_TTL_SECONDS: int = 28_800

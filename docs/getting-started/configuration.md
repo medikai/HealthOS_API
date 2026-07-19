@@ -193,7 +193,7 @@ Add the application ID and secret to `src/.env`. Do not commit the secret or add
 
 ```env
 LOGTO_ENABLED=true
-LOGTO_ENDPOINT=https://your-tenant.logto.app
+LOGTO_ENDPOINT=https://your-tenant.logto.app # Do not append /oidc
 LOGTO_APP_ID=your-traditional-web-app-id
 LOGTO_APP_SECRET=your-traditional-web-app-secret
 LOGTO_REDIRECT_URI=http://localhost:8000/api/v1/auth/callback
@@ -201,6 +201,14 @@ LOGTO_POST_LOGOUT_REDIRECT_URI=http://localhost:5173/
 AUTH_POST_LOGIN_REDIRECT_URI=http://localhost:5173/
 AUTH_COOKIE_SECURE=false
 AUTH_COOKIE_SAMESITE=lax
+```
+
+`LOGTO_ENDPOINT` is the Logto tenant base URL. The backend also accepts an issuer URL ending in `/oidc`, but use the base URL for new configuration.
+
+HealthOS requests only the OIDC `openid` scope by default, which is sufficient to obtain the immutable Logto subject and provision `identity.user_account`. To store a user's display name, avatar, or email, enable the corresponding **User data** permissions (`profile` and/or `email`) in the Logto application's **Permissions** tab, then explicitly add them to the environment:
+
+```env
+LOGTO_SCOPES=["openid","profile","email"]
 ```
 
 For production, use HTTPS, set `AUTH_COOKIE_SECURE=true`, and use exact production URLs. Set `AUTH_COOKIE_SAMESITE=none` only when the frontend and API are genuinely cross-site.
