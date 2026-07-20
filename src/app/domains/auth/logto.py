@@ -56,8 +56,14 @@ class LogtoOidcClient:
         if not isinstance(id_token, str):
             raise self._unauthorized("Logto did not return an ID token.")
 
-        claims = await self._validate_id_token(configuration, id_token, transaction.nonce)
-        userinfo = await self._get_userinfo(configuration, token_response.get("access_token"))
+        access_token = token_response.get("access_token")
+        if not isinstance(access_token, str):
+            raise self._unauthorized("Logto did not return an access token.")
+
+        claims = await self._validate_id_token(
+            configuration, id_token, transaction.nonce, access_token
+        )
+        userinfo = await self._get_userinfo(configuration, access_token)
         if userinfo.get("sub") != claims.get("sub"):
             raise self._unauthorized("Logto user information did not match the ID token.")
         return claims | userinfo, token_response
@@ -130,7 +136,11 @@ class LogtoOidcClient:
         return response.json()
 
     async def _validate_id_token(
-        self, configuration: OidcConfiguration, id_token: str, expected_nonce: str
+        self,
+        configuration: OidcConfiguration,
+        id_token: str,
+        expected_nonce: str,
+        access_token: str,
     ) -> dict[str, Any]:
         try:
             header = jwt.get_unverified_header(id_token)
@@ -150,6 +160,8 @@ class LogtoOidcClient:
                 algorithms=[algorithm],
                 audience=self._required("LOGTO_APP_ID", settings.LOGTO_APP_ID),
                 issuer=configuration.issuer,
+                # Verify at_hash when Logto includes it in a hybrid-compatible ID token.
+                access_token=access_token,
             )
         except (httpx.HTTPError, JWTError, ValueError) as exc:
             # Deliberately log only the validation reason; never log the token or claims.
