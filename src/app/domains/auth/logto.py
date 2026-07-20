@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import logging
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,8 @@ from jose import JWTError, jwt
 from ...core.auth_session import LoginTransaction
 from ...core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class OidcConfiguration:
@@ -20,6 +23,7 @@ class OidcConfiguration:
     userinfo_endpoint: str
     jwks_uri: str
     issuer: str
+    id_token_signing_algorithms: list[str]
     end_session_endpoint: str | None
 
 
@@ -98,6 +102,7 @@ class LogtoOidcClient:
                 userinfo_endpoint=payload["userinfo_endpoint"],
                 jwks_uri=payload["jwks_uri"],
                 issuer=payload["issuer"],
+                id_token_signing_algorithms=payload["id_token_signing_alg_values_supported"],
                 end_session_endpoint=payload.get("end_session_endpoint"),
             )
         except KeyError as exc:
@@ -130,7 +135,7 @@ class LogtoOidcClient:
         try:
             header = jwt.get_unverified_header(id_token)
             algorithm = header.get("alg")
-            if algorithm != "RS256":
+            if not isinstance(algorithm, str) or algorithm not in configuration.id_token_signing_algorithms:
                 raise JWTError("Unsupported signing algorithm")
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(configuration.jwks_uri)
@@ -146,7 +151,9 @@ class LogtoOidcClient:
                 audience=self._required("LOGTO_APP_ID", settings.LOGTO_APP_ID),
                 issuer=configuration.issuer,
             )
-        except (httpx.HTTPError, JWTError, ValueError):
+        except (httpx.HTTPError, JWTError, ValueError) as exc:
+            # Deliberately log only the validation reason; never log the token or claims.
+            logger.warning("Logto ID token validation failed: %s", exc)
             raise self._unauthorized("Invalid Logto ID token.") from None
         if claims.get("nonce") != expected_nonce:
             raise self._unauthorized("Invalid Logto sign-in nonce.")

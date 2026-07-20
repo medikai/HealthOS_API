@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
+from ..core.auth_session import auth_session_store
 from ..core.db.database import async_get_db
 from ..core.exceptions.http_exceptions import ForbiddenException, RateLimitException, UnauthorizedException
 from ..core.logger import logging
@@ -12,6 +13,7 @@ from ..core.utils.rate_limit import rate_limiter
 from ..crud.crud_rate_limit import crud_rate_limits
 from ..crud.crud_tier import crud_tiers
 from ..crud.crud_users import crud_users
+from ..models.identity import UserAccount
 from ..schemas.rate_limit import RateLimitRead, sanitize_path
 from ..schemas.tier import TierRead
 
@@ -19,6 +21,24 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = settings.DEFAULT_RATE_LIMIT_LIMIT
 DEFAULT_PERIOD = settings.DEFAULT_RATE_LIMIT_PERIOD
+
+
+async def get_current_identity_account(
+    request: Request, db: Annotated[AsyncSession, Depends(async_get_db)]
+) -> UserAccount:
+    """Resolve the BFF session to its HealthOS-owned Logto account mapping."""
+    session = await auth_session_store.get_session(request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
+    if session is None:
+        raise UnauthorizedException("Authentication required.")
+    logto_user_id = session.get("logto_user_id")
+    if not isinstance(logto_user_id, str):
+        raise UnauthorizedException("Invalid authentication session.")
+    from sqlalchemy import select
+
+    account = await db.scalar(select(UserAccount).where(UserAccount.logto_user_id == logto_user_id))
+    if account is None or not account.is_active:
+        raise UnauthorizedException("Authenticated account is unavailable.")
+    return account
 
 
 async def get_current_user(
