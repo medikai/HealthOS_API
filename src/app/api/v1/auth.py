@@ -5,19 +5,20 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...core.auth_session import auth_session_store
 from ...core.config import settings
 from ...core.db.database import async_get_db
+from ...crud.crud_auth_session import crud_auth_sessions
 from ...crud.crud_identity import crud_user_accounts
 from ...domains.auth.logto import logto_oidc_client
+from ...models.identity import UserAccount
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.get("/login", include_in_schema=False)
-async def login() -> RedirectResponse:
+async def login(db: AsyncSession = Depends(async_get_db)) -> RedirectResponse:
     sign_in_url, transaction = await logto_oidc_client.create_login_transaction()
-    await auth_session_store.save_transaction(transaction)
+    await crud_auth_sessions.save_transaction(db, transaction)
     return RedirectResponse(sign_in_url, status_code=status.HTTP_302_FOUND)
 
 
@@ -34,17 +35,17 @@ async def callback(
     if not code or not state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing Logto callback parameters.")
 
-    transaction = await auth_session_store.pop_transaction(state)
+    transaction = await crud_auth_sessions.pop_transaction(db, state)
     if transaction is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired Logto sign-in state.")
 
     claims, tokens = await logto_oidc_client.complete_login(code, transaction)
     account = await crud_user_accounts.upsert_from_logto(db, claims)
     csrf_token = secrets.token_urlsafe(32)
-    session_id = await auth_session_store.create_session(
+    session_id = await crud_auth_sessions.create_session(
+        db,
         {
-            "user_account_id": str(account.id),
-            "logto_user_id": account.logto_user_id,
+            "user_account_id": account.id,
             "id_token": tokens["id_token"],
             "csrf_token": csrf_token,
         }
@@ -63,14 +64,17 @@ async def callback(
 
 
 @router.get("/me")
-async def me(request: Request) -> dict[str, Any]:
-    session = await auth_session_store.get_session(request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
+async def me(request: Request, db: AsyncSession = Depends(async_get_db)) -> dict[str, Any]:
+    session = await crud_auth_sessions.get_session(db, request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
     if session is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+    account = await db.get(UserAccount, session.user_account_id)
+    if account is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
     return {
         "success": True,
-        "data": {"user_account_id": session["user_account_id"], "logto_user_id": session["logto_user_id"]},
-        "meta": {"csrf_token": session["csrf_token"]},
+        "data": {"user_account_id": str(session.user_account_id), "logto_user_id": account.logto_user_id},
+        "meta": {"csrf_token": session.csrf_token},
     }
 
 
@@ -78,13 +82,14 @@ async def me(request: Request) -> dict[str, Any]:
 async def logout(
     response: Response,
     session_cookie: Annotated[str | None, Cookie(alias=settings.AUTH_SESSION_COOKIE_NAME)] = None,
+    db: AsyncSession = Depends(async_get_db),
 ) -> dict[str, Any]:
-    session = await auth_session_store.get_session(session_cookie)
-    await auth_session_store.delete_session(session_cookie)
+    session = await crud_auth_sessions.get_session(db, session_cookie)
+    await crud_auth_sessions.delete_session(db, session_cookie)
     response.delete_cookie(key=settings.AUTH_SESSION_COOKIE_NAME, path="/")
     return {
         "success": True,
-        "data": {"logout_url": await logto_oidc_client.get_logout_url(session.get("id_token") if session else None)},
+        "data": {"logout_url": await logto_oidc_client.get_logout_url(session.id_token if session else None)},
         "meta": {},
     }
 

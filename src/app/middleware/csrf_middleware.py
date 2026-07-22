@@ -4,8 +4,9 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..core.auth_session import auth_session_store
 from ..core.config import settings
+from ..core.db.database import local_session
+from ..crud.crud_auth_session import crud_auth_sessions
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
@@ -21,9 +22,10 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if not session_id:
             return await call_next(request)
 
-        session = await auth_session_store.get_session(session_id)
+        async with local_session() as db:
+            session = await crud_auth_sessions.get_session(db, session_id)
         provided_token = request.headers.get(settings.AUTH_CSRF_HEADER_NAME)
-        expected_token = session.get("csrf_token") if session else None
+        expected_token = session.csrf_token if session else None
         if not isinstance(expected_token, str) or not isinstance(provided_token, str) or not hmac.compare_digest(
             expected_token, provided_token
         ):

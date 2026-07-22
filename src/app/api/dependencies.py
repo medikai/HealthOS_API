@@ -4,8 +4,8 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
-from ..core.auth_session import auth_session_store
 from ..core.db.database import async_get_db
+from ..crud.crud_auth_session import crud_auth_sessions
 from ..core.exceptions.http_exceptions import ForbiddenException, RateLimitException, UnauthorizedException
 from ..core.logger import logging
 from ..core.security import TokenType, oauth2_scheme, verify_token
@@ -27,15 +27,12 @@ async def get_current_identity_account(
     request: Request, db: Annotated[AsyncSession, Depends(async_get_db)]
 ) -> UserAccount:
     """Resolve the BFF session to its HealthOS-owned Logto account mapping."""
-    session = await auth_session_store.get_session(request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
+    session = await crud_auth_sessions.get_session(db, request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
     if session is None:
         raise UnauthorizedException("Authentication required.")
-    logto_user_id = session.get("logto_user_id")
-    if not isinstance(logto_user_id, str):
-        raise UnauthorizedException("Invalid authentication session.")
     from sqlalchemy import select
 
-    account = await db.scalar(select(UserAccount).where(UserAccount.logto_user_id == logto_user_id))
+    account = await db.scalar(select(UserAccount).where(UserAccount.id == session.user_account_id))
     if account is None or not account.is_active:
         raise UnauthorizedException("Authenticated account is unavailable.")
     return account
