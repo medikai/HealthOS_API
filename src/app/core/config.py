@@ -53,11 +53,6 @@ class DatabaseSettings(BaseSettings):
 
 
 class PostgresSettings(DatabaseSettings):
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
-    POSTGRES_SERVER: str
-    POSTGRES_PORT: int
-    POSTGRES_DB: str
     POSTGRES_SYNC_URL: str
     POSTGRES_ASYNC_URL: str
 
@@ -73,30 +68,8 @@ class TestSettings(BaseSettings):
     ...
 
 
-class RedisCacheSettings(BaseSettings):
-    REDIS_CACHE_HOST: str
-    REDIS_CACHE_PORT: int
-    REDIS_CACHE_URL: str
-
-
 class ClientSideCacheSettings(BaseSettings):
     CLIENT_CACHE_MAX_AGE: int
-
-
-class RedisQueueSettings(BaseSettings):
-    REDIS_QUEUE_HOST: str
-    REDIS_QUEUE_PORT: int
-
-
-class RedisRateLimiterSettings(BaseSettings):
-    REDIS_RATE_LIMIT_HOST: str
-    REDIS_RATE_LIMIT_PORT: int
-    REDIS_RATE_LIMIT_URL: str
-
-
-class DefaultRateLimitSettings(BaseSettings):
-    DEFAULT_RATE_LIMIT_LIMIT: int
-    DEFAULT_RATE_LIMIT_PERIOD: int
 
 
 class CRUDAdminSettings(BaseSettings):
@@ -112,12 +85,6 @@ class CRUDAdminSettings(BaseSettings):
     CRUD_ADMIN_TRACK_EVENTS: bool
     CRUD_ADMIN_TRACK_SESSIONS: bool
 
-    CRUD_ADMIN_REDIS_ENABLED: bool
-    CRUD_ADMIN_REDIS_HOST: str
-    CRUD_ADMIN_REDIS_PORT: int
-    CRUD_ADMIN_REDIS_DB: int
-    CRUD_ADMIN_REDIS_PASSWORD: str | None
-    CRUD_ADMIN_REDIS_SSL: bool
 
 
 class HealthOSArchitectureSettings(BaseSettings):
@@ -176,11 +143,7 @@ class Settings(
     CryptSettings,
     FirstUserSettings,
     TestSettings,
-    RedisCacheSettings,
     ClientSideCacheSettings,
-    RedisQueueSettings,
-    RedisRateLimiterSettings,
-    DefaultRateLimitSettings,
     CRUDAdminSettings,
     EnvironmentSettings,
     CORSSettings,

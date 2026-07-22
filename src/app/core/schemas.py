@@ -19,7 +19,6 @@ class ReadyCheck(BaseModel):
     version: str
     app: str
     database: str
-    redis: str
     timestamp: str
 
 
