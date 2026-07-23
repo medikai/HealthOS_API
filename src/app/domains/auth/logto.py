@@ -2,6 +2,7 @@ import base64
 import hashlib
 import logging
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -29,6 +30,75 @@ class OidcConfiguration:
 
 class LogtoOidcClient:
     _configuration: OidcConfiguration | None = None
+    _management_token: str | None = None
+    _management_token_expires_at: float = 0
+
+    async def create_management_organization(self, name: str) -> str:
+        """Create an organization in Logto through a configured M2M application."""
+        base_url = self._required("LOGTO_MANAGEMENT_API_BASE_URL", settings.LOGTO_MANAGEMENT_API_BASE_URL).rstrip("/")
+        token = await self._get_management_token()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{base_url}/organizations",
+                json={"name": name},
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            )
+        if response.is_error:
+            logger.warning("Logto organization creation failed with status %s", response.status_code)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to create Logto organization.")
+        organization_id = response.json().get("id")
+        if not isinstance(organization_id, str) or not organization_id:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Logto returned an invalid organization.")
+        return organization_id
+
+    async def add_management_organization_member(self, organization_id: str, user_id: str) -> None:
+        token = await self._get_management_token()
+        base_url = self._required("LOGTO_MANAGEMENT_API_BASE_URL", settings.LOGTO_MANAGEMENT_API_BASE_URL).rstrip("/")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{base_url}/organizations/{organization_id}/users",
+                json={"userIds": [user_id]},
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            )
+        if response.is_error:
+            logger.warning("Logto organization member creation failed with status %s", response.status_code)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to add user to Logto organization.")
+
+    async def assign_management_organization_role(self, organization_id: str, user_id: str, role_id: str) -> None:
+        token = await self._get_management_token()
+        base_url = self._required("LOGTO_MANAGEMENT_API_BASE_URL", settings.LOGTO_MANAGEMENT_API_BASE_URL).rstrip("/")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{base_url}/organizations/{organization_id}/users/roles",
+                json={"userIds": [user_id], "organizationRoleIds": [role_id]},
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            )
+        if response.is_error:
+            logger.warning("Logto organization role assignment failed with status %s", response.status_code)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to assign Logto organization role.")
+
+    async def _get_management_token(self) -> str:
+        if self._management_token and time.time() < self._management_token_expires_at:
+            return self._management_token
+        token_endpoint = self._required("LOGTO_MANAGEMENT_TOKEN_ENDPOINT", settings.LOGTO_MANAGEMENT_TOKEN_ENDPOINT)
+        app_id = self._required("LOGTO_MANAGEMENT_APP_ID", settings.LOGTO_MANAGEMENT_APP_ID)
+        app_secret = self._required_secret_value("LOGTO_MANAGEMENT_APP_SECRET", settings.LOGTO_MANAGEMENT_APP_SECRET)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                token_endpoint,
+                data={"grant_type": "client_credentials", "resource": settings.LOGTO_MANAGEMENT_API_BASE_URL, "scope": settings.LOGTO_MANAGEMENT_SCOPE},
+                auth=(app_id, app_secret),
+                headers={"Accept": "application/json"},
+            )
+        if response.is_error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to authorize with Logto Management API.")
+        payload = response.json()
+        token = payload.get("access_token")
+        if not isinstance(token, str):
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Logto did not return a management token.")
+        self._management_token = token
+        self._management_token_expires_at = time.time() + max(int(payload.get("expires_in", 3600)) - 60, 60)
+        return token
 
     async def create_login_transaction(self) -> tuple[str, LoginTransaction]:
         configuration = await self._get_configuration()
@@ -198,6 +268,12 @@ class LogtoOidcClient:
         if settings.LOGTO_APP_SECRET is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"{name} is not configured.")
         return settings.LOGTO_APP_SECRET.get_secret_value()
+
+    @staticmethod
+    def _required_secret_value(name: str, value: Any) -> str:
+        if value is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"{name} is not configured.")
+        return value.get_secret_value()
 
     @staticmethod
     def _ensure_enabled() -> None:

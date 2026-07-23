@@ -27,3 +27,15 @@ class OrganizationRead(BaseModel):
     name: str
     code: str
 
+
+class FacilityCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=2, max_length=255)
+    code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+
+class DepartmentCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=2, max_length=255)
+    code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9_]+$")
+    facility_id: uuid.UUID | None = None

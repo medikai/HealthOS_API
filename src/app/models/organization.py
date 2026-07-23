@@ -16,9 +16,43 @@ class Organization(Base):
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    logto_organization_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class Facility(Base):
+    __tablename__ = "facility"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_facility_organization_code"),
+        {"schema": "organization"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+
+
+class Department(Base):
+    __tablename__ = "department"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "code", name="uq_department_organization_code"),
+        {"schema": "organization"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("organization.facility.id"), index=True, default=None
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 
 
 class StaffMember(Base):

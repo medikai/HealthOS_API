@@ -111,6 +111,14 @@ class LogtoSettings(BaseSettings):
     # Request the minimum required claim set. Add profile/email only after enabling
     # those user-data permissions for the Logto application.
     LOGTO_SCOPES: list[str] = ["openid"]
+    LOGTO_ORGANIZATIONS_ENABLED: bool = False
+    LOGTO_MANAGEMENT_API_BASE_URL: str | None = None
+    LOGTO_MANAGEMENT_TOKEN_ENDPOINT: str | None = None
+    LOGTO_MANAGEMENT_APP_ID: str | None = None
+    LOGTO_MANAGEMENT_APP_SECRET: SecretStr | None = None
+    LOGTO_MANAGEMENT_SCOPE: str = "all"
+    LOGTO_ORGANIZATION_ADMIN_ROLE_ID: str | None = None
+    LOGTO_ORGANIZATION_ROLE_IDS: dict[str, str] = {}
 
     AUTH_SESSION_COOKIE_NAME: str = "healthos_session"
     AUTH_SESSION_TTL_SECONDS: int = 28_800
