@@ -18,19 +18,21 @@ from .bootstrap import _staff_context
 router = APIRouter(tags=["scheduling"])
 
 
-async def _scope(db: AsyncSession, account: UserAccount, facility_uuid: UUID | None = None):
+async def _scope(db: AsyncSession, account: UserAccount, facility_uuid: UUID | str | None = None):
     staff, organization = await _staff_context(db, account)
-    query = select(Facility).join(StaffAssignment, StaffAssignment.facility_id == Facility.id).where(StaffAssignment.staff_member_id == staff.id, StaffAssignment.is_active.is_(True), Facility.is_active.is_(True))
-    if facility_uuid:
+    query = select(Facility).join(StaffAssignment, StaffAssignment.staff_member_id == staff.id).where(StaffAssignment.is_active.is_(True), Facility.is_active.is_(True), Facility.organization_id == organization.id)
+    query = query.where((StaffAssignment.facility_id == Facility.id) | (StaffAssignment.role_code == "organization_admin"))
+    if facility_uuid and str(facility_uuid).lower() != "all":
+        facility_uuid = UUID(str(facility_uuid))
         query = query.where(Facility.id == facility_uuid)
     facility = (await db.scalars(query)).first()
-    if facility_uuid and facility is None:
+    if facility_uuid and str(facility_uuid).lower() != "all" and facility is None:
         raise HTTPException(status_code=403, detail="Facility access is not permitted.")
     return organization, facility
 
 
 @router.get("/practitioners")
-async def practitioners(account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)], facility_uuid: UUID | None = None) -> dict[str, Any]:
+async def practitioners(account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)], facility_uuid: str | None = None) -> dict[str, Any]:
     organization, facility = await _scope(db, account, facility_uuid)
     query = select(Practitioner).where(Practitioner.organization_id == organization.id, Practitioner.is_active.is_(True))
     items = [{"uuid": str(p.id), "name": p.person_name, "specialty": p.specialty} for p in (await db.scalars(query)).all()]

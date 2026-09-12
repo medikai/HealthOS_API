@@ -24,6 +24,25 @@ async def today_dashboard(facility_uuid: UUID, account: Annotated[UserAccount, D
     return {"success": True, "data": {"date": dashboard_date.isoformat(), "facilities": [str(facility_uuid)], "metrics": {"appointments": appointments or 0, "checked_in": queue_counts.get("waiting", 0) + queue_counts.get("called", 0) + queue_counts.get("in_consultation", 0), "waiting": queue_counts.get("waiting", 0), "in_consultation": queue_counts.get("in_consultation", 0), "completed": queue_counts.get("completed", 0)}}, "meta": {}}
 
 
+@router.get("/stats")
+async def facility_stats(facility_uuid: str, account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)]) -> dict[str, Any]:
+    organization, facility = await _scope(db, account, facility_uuid)
+    selected_facility = UUID(facility_uuid) if facility_uuid.lower() != "all" else None
+    today = date.today()
+    start, end = datetime.combine(today, time.min), datetime.combine(today + timedelta(days=1), time.min)
+    appointment_query = select(Appointment).where(Appointment.organization_id == organization.id, Appointment.scheduled_start >= start, Appointment.scheduled_start < end)
+    queue_query = select(QueueEntry).where(QueueEntry.organization_id == organization.id, QueueEntry.queue_date == today)
+    if selected_facility:
+        appointment_query = appointment_query.where(Appointment.facility_id == selected_facility)
+        queue_query = queue_query.where(QueueEntry.facility_id == selected_facility)
+    appointments = (await db.scalars(appointment_query)).all()
+    queue = (await db.scalars(queue_query)).all()
+    waiting = [entry for entry in queue if entry.status in {"waiting", "called"}]
+    completed = sum(appointment.status == "completed" for appointment in appointments)
+    data = {"facility_uuid": facility_uuid, "scheduled_today": len(appointments), "confirmed_count": sum(appointment.status in {"booked", "confirmed"} for appointment in appointments), "pending_count": sum(appointment.status not in {"confirmed", "completed", "cancelled", "no_show"} for appointment in appointments), "in_waiting_room": len(waiting), "avg_wait_minutes": 0, "in_consultation": sum(entry.status == "in_consultation" for entry in queue), "active_doctors_count": len({str(appointment.practitioner_id) for appointment in appointments}), "completed_today": completed, "throughput_pct": round(completed / len(appointments) * 1000) / 10 if appointments else 0, "walk_ins_today": sum(entry.appointment_id is None for entry in queue), "walk_ins_waiting": sum(entry.appointment_id is None and entry.status in {"waiting", "called"} for entry in queue), "mean_turnaround_mins": 0}
+    return {"success": True, "data": data, "meta": {}}
+
+
 @router.get("/masters/visit-reasons")
 async def visit_reasons() -> dict[str, Any]:
     return {"success": True, "data": {"items": [{"code": "examination", "name": "Examination"}, {"code": "follow_up", "name": "Follow-up"}, {"code": "prescription_renewal", "name": "Prescription renewal"}, {"code": "custom", "name": "Custom"}]}, "meta": {}}

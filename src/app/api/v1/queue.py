@@ -34,10 +34,13 @@ def _item(entry: QueueEntry) -> dict[str, Any]:
 
 
 @router.get("/queue")
-async def queue_list(facility_uuid: UUID, queue_date: date = Query(default_factory=date.today), account: Annotated[UserAccount, Depends(get_current_identity_account)] = ..., db: Annotated[AsyncSession, Depends(async_get_db)] = ...) -> dict[str, Any]:
-    await _scope(db, account, facility_uuid)
-    rows = (await db.scalars(select(QueueEntry).where(QueueEntry.facility_id == facility_uuid, QueueEntry.queue_date == queue_date).order_by(QueueEntry.token_number))).all()
-    return {"success": True, "data": {"items": [_item(row) for row in rows]}, "meta": {"queue_date": queue_date.isoformat()}}
+async def queue_list(facility_uuid: str, queue_date: date = Query(default_factory=date.today), account: Annotated[UserAccount, Depends(get_current_identity_account)] = ..., db: Annotated[AsyncSession, Depends(async_get_db)] = ...) -> dict[str, Any]:
+    organization, facility = await _scope(db, account, facility_uuid)
+    query = select(QueueEntry).where(QueueEntry.organization_id == organization.id, QueueEntry.queue_date == queue_date)
+    if str(facility_uuid).lower() != "all":
+        query = query.where(QueueEntry.facility_id == UUID(facility_uuid))
+    rows = (await db.scalars(query.order_by(QueueEntry.token_number))).all()
+    return {"success": True, "data": {"items": [_item(row) for row in rows]}, "meta": {"queue_date": queue_date.isoformat(), "facility_uuid": str(facility.id) if facility else "all"}}
 
 
 @router.post("/walk-ins", status_code=status.HTTP_201_CREATED)

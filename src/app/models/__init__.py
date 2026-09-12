@@ -1,5 +1,11 @@
 from .identity import AuthSession, LoginTransaction, UserAccount
-from .organization import Department, Facility, Organization, StaffAssignment, StaffMember
+from .identity import Patient, Person
+from .care import (
+    Appointment, AuditLog, Encounter, Practitioner, PractitionerAvailabilityException,
+    PractitionerAvailabilityRule, Prescription, PrescriptionItem, QueueCounter,
+    QueueEntry, SoapNote, Vital,
+)
+from .organization import Department, Facility, FacilitySchedule, Organization, ProtectedPeriod, StaffAssignment, StaffMember
 from .platform import Feature, FeatureAssignment
 from .post import Post
 from .rate_limit import RateLimit

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request
@@ -13,6 +14,46 @@ from ..crud.crud_users import crud_users
 from ..models.identity import UserAccount
 
 logger = logging.getLogger(__name__)
+_local_demo_lock = asyncio.Lock()
+
+
+async def _get_or_create_local_demo_account(db: AsyncSession) -> UserAccount:
+    """Provision the local bypass principal once, including its admin scope."""
+    from sqlalchemy import select
+    from ..models.organization import Facility, Organization, StaffAssignment, StaffMember
+
+    async with _local_demo_lock:
+        demo_account = await db.scalar(select(UserAccount).where(UserAccount.logto_user_id == "local-demo-user"))
+        if demo_account is None:
+            demo_account = UserAccount(logto_user_id="local-demo-user", email="demo@healthos.local", display_name="Local Demo User")
+            db.add(demo_account)
+            await db.flush()
+
+        organization = await db.scalar(select(Organization).where(Organization.code == "LOCAL-DEMO"))
+        if organization is None:
+            organization = Organization(name="HealthOS Local Demo", code="LOCAL-DEMO", is_active=True)
+            db.add(organization)
+            await db.flush()
+
+        facility = await db.scalar(select(Facility).where(Facility.organization_id == organization.id).order_by(Facility.created_at))
+        if facility is None:
+            facility = Facility(organization_id=organization.id, name="Main Hospital", code="MAIN", is_active=True)
+            db.add(facility)
+            await db.flush()
+
+        staff = await db.scalar(select(StaffMember).where(StaffMember.organization_id == organization.id, StaffMember.user_account_id == demo_account.id))
+        if staff is None:
+            staff = StaffMember(organization_id=organization.id, user_account_id=demo_account.id, is_active=True)
+            db.add(staff)
+            await db.flush()
+
+        assignment = await db.scalar(select(StaffAssignment).where(StaffAssignment.staff_member_id == staff.id, StaffAssignment.role_code == "organization_admin"))
+        if assignment is None:
+            db.add(StaffAssignment(staff_member_id=staff.id, facility_id=facility.id, role_code="organization_admin", is_active=True))
+
+        await db.commit()
+        await db.refresh(demo_account)
+        return demo_account
 
 
 
@@ -20,6 +61,8 @@ async def get_current_identity_account(
     request: Request, db: Annotated[AsyncSession, Depends(async_get_db)]
 ) -> UserAccount:
     """Resolve the BFF session to its HealthOS-owned Logto account mapping."""
+    if settings.ENVIRONMENT.value == "local" and not settings.LOGTO_ENABLED and settings.AUTH_LOCAL_DEV_BYPASS:
+        return await _get_or_create_local_demo_account(db)
     session = await crud_auth_sessions.get_session(db, request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
     if session is None:
         raise UnauthorizedException("Authentication required.")

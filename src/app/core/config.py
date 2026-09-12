@@ -125,6 +125,7 @@ class LogtoSettings(BaseSettings):
     AUTH_COOKIE_SECURE: bool = True
     AUTH_COOKIE_SAMESITE: str = "lax"
     AUTH_CSRF_HEADER_NAME: str = "X-CSRF-Token"
+    AUTH_LOCAL_DEV_BYPASS: bool = False
 
 
 class EnvironmentOption(str, Enum):
