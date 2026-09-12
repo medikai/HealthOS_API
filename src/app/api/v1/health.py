@@ -19,7 +19,7 @@ STATUS_UNHEALTHY = "unhealthy"
 LOGGER = logging.getLogger(__name__)
 
 
-@router.get("/health", response_model=HealthCheck)
+@router.get("/health")
 async def health():
     http_status = status.HTTP_200_OK
     response = {
@@ -29,10 +29,10 @@ async def health():
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
-    return JSONResponse(status_code=http_status, content=response)
+    return JSONResponse(status_code=http_status, content={"success": True, "data": response, "meta": {}})
 
 
-@router.get("/ready", response_model=ReadyCheck)
+@router.get("/ready")
 async def ready(db: Annotated[AsyncSession, Depends(async_get_db)]):
     database_status = await check_database_health(db=db)
     LOGGER.debug(f"Database health check status: {database_status}")
@@ -48,4 +48,4 @@ async def ready(db: Annotated[AsyncSession, Depends(async_get_db)]):
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
     }
 
-    return JSONResponse(status_code=http_status, content=response)
+    return JSONResponse(status_code=http_status, content={"success": overall_status == STATUS_HEALTHY, "data": response if overall_status == STATUS_HEALTHY else None, "error": None if overall_status == STATUS_HEALTHY else {"code": "SERVICE_UNAVAILABLE", "message": "Service is not ready.", "details": []}, "meta": {}})

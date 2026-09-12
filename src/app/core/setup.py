@@ -4,10 +4,13 @@ from typing import Any
 
 import anyio
 import fastapi
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
+from uuid import uuid4
 
 from ..api.dependencies import get_current_superuser
 from ..middleware.client_cache_middleware import ClientCacheMiddleware
@@ -143,6 +146,27 @@ def create_application(
         lifespan = lifespan_factory(settings, create_tables_on_start=create_tables_on_start)
 
     application = FastAPI(lifespan=lifespan, **kwargs)
+
+    def request_id(request: Request) -> str:
+        return request.headers.get("X-Request-ID") or f"req_{uuid4().hex}"
+
+    @application.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        details = [{"field": ".".join(str(part) for part in error.get("loc", [])), "message": error.get("msg", "Invalid value")} for error in exc.errors()]
+        return JSONResponse(status_code=422, content={"success": False, "error": {"code": "VALIDATION_ERROR", "message": "Request validation failed.", "details": details}, "meta": {"request_id": request_id(request)}})
+
+    @application.exception_handler(HTTPException)
+    async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
+        code_by_status = {400: "BAD_REQUEST", 401: "AUTHENTICATION_REQUIRED", 403: "FORBIDDEN", 404: "NOT_FOUND", 409: "CONFLICT", 429: "RATE_LIMITED"}
+        detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
+        return JSONResponse(status_code=exc.status_code, content={"success": False, "error": {"code": code_by_status.get(exc.status_code, "REQUEST_FAILED"), "message": detail, "details": []}, "meta": {"request_id": request_id(request)}})
+
+    @application.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        import logging
+        logging.getLogger(__name__).exception("Unhandled request error", exc_info=exc)
+        return JSONResponse(status_code=500, content={"success": False, "error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred.", "details": []}, "meta": {"request_id": request_id(request)}})
+
     application.include_router(router)
 
     if isinstance(settings, ClientSideCacheSettings):
