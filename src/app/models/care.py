@@ -15,9 +15,9 @@ class Practitioner(Base):
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
-    user_account_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), unique=True, default=None, index=True)
     person_name: Mapped[str] = mapped_column(String(255))
     specialty: Mapped[str | None] = mapped_column(String(255), default=None)
+    user_account_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), unique=True, default=None, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 
@@ -66,9 +66,9 @@ class PractitionerAvailabilityException(Base):
     facility_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.facility.id"), index=True)
     practitioner_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.practitioner.id"), index=True)
     exception_date: Mapped[date] = mapped_column(Date, index=True)
+    exception_type: Mapped[str] = mapped_column(String(32))
     start_time: Mapped[time | None] = mapped_column(Time, default=None)
     end_time: Mapped[time | None] = mapped_column(Time, default=None)
-    exception_type: Mapped[str] = mapped_column(String(32))
     reason: Mapped[str | None] = mapped_column(Text, default=None)
 
 
@@ -90,10 +90,10 @@ class QueueEntry(Base):
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
     facility_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.facility.id"), index=True)
     patient_id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), index=True)
-    appointment_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("care.appointment.id"), default=None, index=True)
-    practitioner_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.practitioner.id"), default=None, index=True)
     queue_date: Mapped[date] = mapped_column(Date, index=True)
     token_number: Mapped[int] = mapped_column(Integer)
+    appointment_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("care.appointment.id"), default=None, index=True)
+    practitioner_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.practitioner.id"), default=None, index=True)
     status: Mapped[str] = mapped_column(String(32), default="waiting", index=True)
     reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
     reason_text: Mapped[str | None] = mapped_column(Text, default=None)
@@ -186,10 +186,10 @@ class AuditLog(Base):
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
-    facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("organization.facility.id"), default=None, index=True)
-    actor_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None, index=True)
     action: Mapped[str] = mapped_column(String(128), index=True)
     resource_type: Mapped[str] = mapped_column(String(64))
+    facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("organization.facility.id"), default=None, index=True)
+    actor_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None, index=True)
     resource_id: Mapped[str | None] = mapped_column(String(128), default=None)
     patient_id: Mapped[str | None] = mapped_column(String(128), default=None)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC), index=True)

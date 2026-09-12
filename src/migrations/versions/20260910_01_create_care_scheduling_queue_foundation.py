@@ -24,7 +24,15 @@ def upgrade() -> None:
     op.create_index("ix_care_appointment_practitioner_id", "appointment", ["practitioner_id"], schema="care")
     op.create_index("ix_care_appointment_scheduled_start", "appointment", ["scheduled_start"], schema="care")
     op.create_index("ix_care_appointment_status", "appointment", ["status"], schema="care")
-    op.create_exclude_constraint("ex_appointment_active_practitioner_slot", "appointment", (sa.text("practitioner_id WITH ="), sa.text("tstzrange(scheduled_start, scheduled_end, '[)') WITH &&")), where=sa.text("status IN ('booked', 'checked_in', 'in_consultation')"), using="gist", schema="care")
+    op.execute("""
+        ALTER TABLE care.appointment
+        ADD CONSTRAINT ex_appointment_active_practitioner_slot
+        EXCLUDE USING gist (
+            practitioner_id WITH =,
+            tstzrange(scheduled_start, scheduled_end, '[)') WITH &&
+        )
+        WHERE (status IN ('booked', 'checked_in', 'in_consultation'))
+    """)
     for name, columns in (("practitioner_availability_rule", [("organization_id", uuid, "organization.organization.id"), ("facility_id", uuid, "organization.facility.id"), ("practitioner_id", uuid, "identity.practitioner.id"), ("weekday", sa.Integer(), None), ("start_time", sa.Time(), None), ("end_time", sa.Time(), None), ("slot_duration_minutes", sa.Integer(), None), ("valid_from", sa.Date(), None), ("valid_until", sa.Date(), None), ("status", sa.String(32), None)]),):
         cols = [sa.Column("id", uuid, primary_key=True)]
         for col, typ, fk in columns:
@@ -44,6 +52,6 @@ def downgrade() -> None:
     op.drop_table("queue_counter", schema="care")
     op.drop_table("practitioner_availability_exception", schema="care")
     op.drop_table("practitioner_availability_rule", schema="care")
-    op.drop_constraint("ex_appointment_active_practitioner_slot", "appointment", schema="care", type_="exclude")
+    op.execute("ALTER TABLE care.appointment DROP CONSTRAINT IF EXISTS ex_appointment_active_practitioner_slot")
     op.drop_table("appointment", schema="care")
     op.drop_table("practitioner", schema="identity")
