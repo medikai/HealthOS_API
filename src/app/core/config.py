@@ -110,7 +110,7 @@ class LogtoSettings(BaseSettings):
     AUTH_POST_LOGIN_REDIRECT_URI: str | None = None
     # Request the minimum required claim set. Add profile/email only after enabling
     # those user-data permissions for the Logto application.
-    LOGTO_SCOPES: list[str] = ["openid"]
+    LOGTO_SCOPES: list[str] = ["openid", "profile", "email"]
     LOGTO_ORGANIZATIONS_ENABLED: bool = False
     LOGTO_MANAGEMENT_API_BASE_URL: str | None = None
     LOGTO_MANAGEMENT_TOKEN_ENDPOINT: str | None = None

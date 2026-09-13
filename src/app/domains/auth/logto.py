@@ -100,7 +100,7 @@ class LogtoOidcClient:
         self._management_token_expires_at = time.time() + max(int(payload.get("expires_in", 3600)) - 60, 60)
         return token
 
-    async def create_login_transaction(self) -> tuple[str, LoginTransaction]:
+    async def create_login_transaction(self, *, first_screen: str = "sign_in") -> tuple[str, LoginTransaction]:
         configuration = await self._get_configuration()
         state = secrets.token_urlsafe(32)
         nonce = secrets.token_urlsafe(32)
@@ -116,6 +116,7 @@ class LogtoOidcClient:
             "nonce": nonce,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
+            "first_screen": first_screen,
         }
         return f"{configuration.authorization_endpoint}?{urlencode(parameters)}", transaction
 

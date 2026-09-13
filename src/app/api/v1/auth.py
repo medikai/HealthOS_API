@@ -22,6 +22,14 @@ async def login(db: AsyncSession = Depends(async_get_db)) -> RedirectResponse:
     return RedirectResponse(sign_in_url, status_code=status.HTTP_302_FOUND)
 
 
+@router.get("/register", include_in_schema=False)
+async def register(db: AsyncSession = Depends(async_get_db)) -> RedirectResponse:
+    """Start Logto-hosted registration; credentials never enter HealthOS."""
+    sign_up_url, transaction = await logto_oidc_client.create_login_transaction(first_screen="register")
+    await crud_auth_sessions.save_transaction(db, transaction)
+    return RedirectResponse(sign_up_url, status_code=status.HTTP_302_FOUND)
+
+
 @router.get("/callback", include_in_schema=False)
 async def callback(
     code: str | None = None,

@@ -61,7 +61,8 @@ async def get_current_identity_account(
     request: Request, db: Annotated[AsyncSession, Depends(async_get_db)]
 ) -> UserAccount:
     """Resolve the BFF session to its HealthOS-owned Logto account mapping."""
-    if settings.ENVIRONMENT.value == "local" and not settings.LOGTO_ENABLED and settings.AUTH_LOCAL_DEV_BYPASS:
+    # Explicit emergency/demo bypass. Keep this false on any public deployment.
+    if not settings.LOGTO_ENABLED and settings.AUTH_LOCAL_DEV_BYPASS:
         return await _get_or_create_local_demo_account(db)
     session = await crud_auth_sessions.get_session(db, request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
     if session is None:
