@@ -172,6 +172,12 @@ def create_application(
     if isinstance(settings, ClientSideCacheSettings):
         application.add_middleware(ClientCacheMiddleware, max_age=settings.CLIENT_CACHE_MAX_AGE)
 
+    # Starlette runs middleware in LIFO order (last-added = outermost).
+    # CSRFMiddleware must be added BEFORE CORSMiddleware so that CORS wraps
+    # all responses, including CSRF rejections — otherwise CSRF 403s appear
+    # as confusing CORS errors in the browser.
+    application.add_middleware(CSRFMiddleware)
+    application.add_middleware(LoggerMiddleware)
     if isinstance(settings, CORSSettings):
         application.add_middleware(
             CORSMiddleware,

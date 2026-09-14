@@ -99,6 +99,12 @@ async def logout(
     session = await crud_auth_sessions.get_session(db, session_cookie)
     await crud_auth_sessions.delete_session(db, session_cookie)
     response.delete_cookie(key=settings.AUTH_SESSION_COOKIE_NAME, path="/")
+    response.delete_cookie(
+        key=settings.AUTH_SESSION_COOKIE_NAME,
+        path="/",
+        secure=settings.AUTH_COOKIE_SECURE,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+    )
     return {
         "success": True,
         "data": {"logout_url": await logto_oidc_client.get_logout_url(session.id_token if session else None)},
