@@ -23,11 +23,24 @@ async def _scope(db: AsyncSession, account: UserAccount, facility_uuid: UUID | s
     query = select(Facility).join(StaffAssignment, StaffAssignment.staff_member_id == staff.id).where(StaffAssignment.is_active.is_(True), Facility.is_active.is_(True), Facility.organization_id == organization.id)
     query = query.where((StaffAssignment.facility_id == Facility.id) | (StaffAssignment.role_code == "organization_admin"))
     if facility_uuid and str(facility_uuid).lower() != "all":
-        facility_uuid = UUID(str(facility_uuid))
-        query = query.where(Facility.id == facility_uuid)
-    facility = (await db.scalars(query)).first()
-    if facility_uuid and str(facility_uuid).lower() != "all" and facility is None:
+        try:
+            facility_id = UUID(str(facility_uuid))
+            target_query = query.where(Facility.id == facility_id)
+            facility = (await db.scalars(target_query)).first()
+            if facility:
+                return organization, facility
+        except (ValueError, TypeError):
+            pass
+
+        assignments = (await db.scalars(select(StaffAssignment).where(StaffAssignment.staff_member_id == staff.id, StaffAssignment.is_active.is_(True)))).all()
+        if any(a.role_code == "organization_admin" for a in assignments):
+            fallback_facility = (await db.scalars(select(Facility).where(Facility.organization_id == organization.id, Facility.is_active.is_(True)).order_by(Facility.created_at))).first()
+            if fallback_facility:
+                return organization, fallback_facility
+
         raise HTTPException(status_code=403, detail="Facility access is not permitted.")
+
+    facility = (await db.scalars(query)).first()
     return organization, facility
 
 
@@ -133,11 +146,11 @@ def _appointment_item(a: Appointment) -> dict[str, Any]:
 
 
 @router.get("/appointments")
-async def list_appointments(facility_uuid: UUID | None = None, account: Annotated[UserAccount, Depends(get_current_identity_account)] = ..., db: Annotated[AsyncSession, Depends(async_get_db)] = ..., status_filter: str | None = Query(default=None, alias="status")) -> dict[str, Any]:
+async def list_appointments(facility_uuid: str | None = None, account: Annotated[UserAccount, Depends(get_current_identity_account)] = ..., db: Annotated[AsyncSession, Depends(async_get_db)] = ..., status_filter: str | None = Query(default=None, alias="status")) -> dict[str, Any]:
     organization, _ = await _scope(db, account, facility_uuid)
     query = select(Appointment).where(Appointment.organization_id == organization.id)
-    if facility_uuid:
-        query = query.where(Appointment.facility_id == facility_uuid)
+    if facility_uuid and str(facility_uuid).lower() != "all":
+        query = query.where(Appointment.facility_id == UUID(str(facility_uuid)))
     if status_filter:
         query = query.where(Appointment.status == status_filter)
     values = (await db.scalars(query.order_by(Appointment.scheduled_start))).all()

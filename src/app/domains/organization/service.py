@@ -54,10 +54,25 @@ class AccessService:
         organization = Organization(name=name, code=code, logto_organization_id=logto_organization_id)
         db.add(organization)
         await db.flush()
+        facility = Facility(organization_id=organization.id, name=f"{name} Main Clinic", code="MAIN", is_active=True)
+        db.add(facility)
+        await db.flush()
         member = StaffMember(organization_id=organization.id, user_account_id=account.id)
         db.add(member)
         await db.flush()
-        db.add(StaffAssignment(staff_member_id=member.id, role_code="organization_admin"))
+        db.add(StaffAssignment(staff_member_id=member.id, facility_id=facility.id, role_code="organization_admin"))
+
+        from ...models.care import Practitioner
+        pract = await db.scalar(select(Practitioner).where(Practitioner.user_account_id == account.id))
+        if not pract:
+            db.add(Practitioner(
+                organization_id=organization.id,
+                person_name=account.display_name or "Doctor",
+                specialty="General Practice",
+                user_account_id=account.id,
+                is_active=True
+            ))
+
         await db.commit()
         await db.refresh(organization)
         return organization

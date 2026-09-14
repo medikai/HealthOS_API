@@ -22,9 +22,9 @@ async def practitioner_detail(practitioner_uuid: UUID, account: Annotated[UserAc
     return {"success": True, "data": {"uuid": str(practitioner.id), "name": practitioner.person_name, "specialty": practitioner.specialty, "organization_uuid": str(practitioner.organization_id)}, "meta": {}}
 
 @router.get("/scheduling/calendar")
-async def calendar(facility_uuid: UUID | None = None, from_datetime: datetime = Query(alias="from"), to_datetime: datetime = Query(alias="to"), account: Annotated[UserAccount, Depends(get_current_identity_account)] = ..., db: Annotated[AsyncSession, Depends(async_get_db)] = ..., facility_uuids: str | None = None, practitioner_uuids: str | None = None) -> dict[str, Any]:
+async def calendar(facility_uuid: str | None = None, from_datetime: datetime = Query(alias="from"), to_datetime: datetime = Query(alias="to"), account: Annotated[UserAccount, Depends(get_current_identity_account)] = ..., db: Annotated[AsyncSession, Depends(async_get_db)] = ..., facility_uuids: str | None = None, practitioner_uuids: str | None = None) -> dict[str, Any]:
     if facility_uuid is None and facility_uuids:
-        facility_uuid = UUID(facility_uuids.split(",")[0])
+        facility_uuid = facility_uuids.split(",")[0]
     if facility_uuid is None:
         raise ValueError("facility_uuid or facility_uuids is required")
     await _scope(db, account, facility_uuid)

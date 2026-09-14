@@ -29,8 +29,9 @@ def _item(member: StaffMember, account: UserAccount, assignments: list[StaffAssi
 
 
 @router.get("")
-async def list_staff(account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)], facility_uuid: UUID | None = None, status: str = "active", q: str | None = None) -> dict[str, Any]:
+async def list_staff(account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)], facility_uuid: str | None = None, status: str = "active", q: str | None = None) -> dict[str, Any]:
     _, organization = await _admin(db, account)
+    parsed_facility = UUID(facility_uuid) if facility_uuid and facility_uuid.lower() != "all" else None
     query = select(StaffMember, UserAccount).join(UserAccount, UserAccount.id == StaffMember.user_account_id).where(StaffMember.organization_id == organization.id)
     if status == "active":
         query = query.where(StaffMember.is_active.is_(True))
@@ -39,8 +40,8 @@ async def list_staff(account: Annotated[UserAccount, Depends(get_current_identit
     rows = (await db.execute(query)).all()
     items = []
     for member, user in rows:
-        assignments = (await db.scalars(select(StaffAssignment).where(StaffAssignment.staff_member_id == member.id, StaffAssignment.is_active.is_(True), *( [StaffAssignment.facility_id == facility_uuid] if facility_uuid else [])))).all()
-        if facility_uuid and not assignments:
+        assignments = (await db.scalars(select(StaffAssignment).where(StaffAssignment.staff_member_id == member.id, StaffAssignment.is_active.is_(True), *( [StaffAssignment.facility_id == parsed_facility] if parsed_facility else [])))).all()
+        if parsed_facility and not assignments:
             continue
         items.append(_item(member, user, assignments))
     return {"success": True, "data": {"items": items}, "meta": {"count": len(items)}}
