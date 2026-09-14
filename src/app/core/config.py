@@ -108,6 +108,7 @@ class LogtoSettings(BaseSettings):
     LOGTO_REDIRECT_URI: str | None = None
     LOGTO_POST_LOGOUT_REDIRECT_URI: str | None = None
     AUTH_POST_LOGIN_REDIRECT_URI: str | None = None
+    AUTH_POST_REGISTRATION_REDIRECT_URI: str | None = None
     # Request the minimum required claim set. Add profile/email only after enabling
     # those user-data permissions for the Logto application.
     # Keep this limited to the scope enabled by the current Logto application.

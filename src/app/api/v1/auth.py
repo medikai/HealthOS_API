@@ -4,6 +4,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from ...core.config import settings
 from ...core.db.database import async_get_db
@@ -11,6 +12,7 @@ from ...crud.crud_auth_session import crud_auth_sessions
 from ...crud.crud_identity import crud_user_accounts
 from ...domains.auth.logto import logto_oidc_client
 from ...models.identity import UserAccount
+from ...models.organization import StaffMember
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -25,7 +27,7 @@ async def login(db: AsyncSession = Depends(async_get_db)) -> RedirectResponse:
 @router.get("/register", include_in_schema=False)
 async def register(db: AsyncSession = Depends(async_get_db)) -> RedirectResponse:
     """Start Logto-hosted registration; credentials never enter HealthOS."""
-    sign_up_url, transaction = await logto_oidc_client.create_login_transaction(first_screen="register")
+    sign_up_url, transaction = await logto_oidc_client.create_login_transaction(first_screen="identifier:register")
     await crud_auth_sessions.save_transaction(db, transaction)
     return RedirectResponse(sign_up_url, status_code=status.HTTP_302_FOUND)
 
@@ -58,7 +60,9 @@ async def callback(
             "csrf_token": csrf_token,
         }
     )
-    response = RedirectResponse(_required_post_login_redirect_uri(), status_code=status.HTTP_303_SEE_OTHER)
+    has_membership = await db.scalar(select(StaffMember.id).where(StaffMember.user_account_id == account.id, StaffMember.is_active.is_(True)))
+    redirect_uri = _required_post_registration_redirect_uri() if not has_membership and settings.AUTH_POST_REGISTRATION_REDIRECT_URI else _required_post_login_redirect_uri()
+    response = RedirectResponse(redirect_uri, status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         key=settings.AUTH_SESSION_COOKIE_NAME,
         value=session_id,
@@ -106,3 +110,9 @@ def _required_post_login_redirect_uri() -> str:
     if not settings.AUTH_POST_LOGIN_REDIRECT_URI:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AUTH_POST_LOGIN_REDIRECT_URI is not configured.")
     return settings.AUTH_POST_LOGIN_REDIRECT_URI
+
+
+def _required_post_registration_redirect_uri() -> str:
+    if not settings.AUTH_POST_REGISTRATION_REDIRECT_URI:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AUTH_POST_REGISTRATION_REDIRECT_URI is not configured.")
+    return settings.AUTH_POST_REGISTRATION_REDIRECT_URI
