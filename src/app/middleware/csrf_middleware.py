@@ -18,6 +18,10 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if request.method in self._safe_methods:
             return await call_next(request)
 
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            return await call_next(request)
+
         session_id = request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME)
         if not session_id:
             return await call_next(request)

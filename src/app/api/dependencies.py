@@ -60,7 +60,23 @@ async def _get_or_create_local_demo_account(db: AsyncSession) -> UserAccount:
 async def get_current_identity_account(
     request: Request, db: Annotated[AsyncSession, Depends(async_get_db)]
 ) -> UserAccount:
-    """Resolve the BFF session to its HealthOS-owned Logto account mapping."""
+    """Resolve the BFF session or local JWT to its HealthOS-owned user account mapping."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        try:
+            import uuid as uuid_pkg
+            from jose import jwt
+            from ..core.security import ALGORITHM, SECRET_KEY
+            payload = jwt.decode(token, SECRET_KEY.get_secret_value(), algorithms=[ALGORITHM])
+            sub = payload.get("sub")
+            if sub:
+                account = await db.get(UserAccount, uuid_pkg.UUID(sub))
+                if account and account.is_active:
+                    return account
+        except Exception:
+            raise UnauthorizedException("Invalid or expired token.")
+
     # Explicit emergency/demo bypass. Keep this false on any public deployment.
     if not settings.LOGTO_ENABLED and settings.AUTH_LOCAL_DEV_BYPASS:
         return await _get_or_create_local_demo_account(db)

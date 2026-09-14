@@ -6,13 +6,18 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+import uuid as uuid_pkg
+from jose import JWTError, jwt
+
 from ...core.config import settings
 from ...core.db.database import async_get_db
+from ...core.security import ALGORITHM, SECRET_KEY, create_access_token, get_password_hash, verify_password
 from ...crud.crud_auth_session import crud_auth_sessions
 from ...crud.crud_identity import crud_user_accounts
 from ...domains.auth.logto import logto_oidc_client
 from ...models.identity import UserAccount
 from ...models.organization import StaffMember
+from ...schemas.local_auth import LocalLoginPayload, LocalRegisterPayload
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -75,8 +80,97 @@ async def callback(
     return response
 
 
+@router.post("/local/register")
+async def local_register(
+    payload: LocalRegisterPayload,
+    db: AsyncSession = Depends(async_get_db),
+) -> dict[str, Any]:
+    if settings.LOGTO_ENABLED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local auth is disabled when Logto is enabled.")
+
+    existing = await db.scalar(select(UserAccount).where(UserAccount.email == payload.email))
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered.")
+
+    account = UserAccount(
+        logto_user_id=f"local:{payload.email}",
+        email=payload.email,
+        display_name=payload.name,
+        password_hash=get_password_hash(payload.password),
+        is_active=True,
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+
+    access_token = await create_access_token({"sub": str(account.id), "email": account.email, "name": account.display_name})
+    return {
+        "success": True,
+        "data": {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "uuid": str(account.id),
+                "email": account.email,
+                "display_name": account.display_name,
+            },
+        },
+        "meta": {},
+    }
+
+
+@router.post("/local/login")
+async def local_login(
+    payload: LocalLoginPayload,
+    db: AsyncSession = Depends(async_get_db),
+) -> dict[str, Any]:
+    if settings.LOGTO_ENABLED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local auth is disabled when Logto is enabled.")
+
+    account = await db.scalar(select(UserAccount).where(UserAccount.email == payload.email))
+    if not account or not account.password_hash or not await verify_password(payload.password, account.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
+
+    if not account.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated.")
+
+    access_token = await create_access_token({"sub": str(account.id), "email": account.email, "name": account.display_name})
+    return {
+        "success": True,
+        "data": {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "uuid": str(account.id),
+                "email": account.email,
+                "display_name": account.display_name,
+            },
+        },
+        "meta": {},
+    }
+
+
 @router.get("/me")
 async def me(request: Request, db: AsyncSession = Depends(async_get_db)) -> dict[str, Any]:
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        try:
+            payload = jwt.decode(token, SECRET_KEY.get_secret_value(), algorithms=[ALGORITHM])
+            sub = payload.get("sub")
+            if not sub:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
+            account = await db.get(UserAccount, uuid_pkg.UUID(sub))
+            if account is None or not account.is_active:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+            return {
+                "success": True,
+                "data": {"user_account_id": str(account.id), "logto_user_id": account.logto_user_id, "email": account.email, "display_name": account.display_name},
+                "meta": {"csrf_token": "bearer-local-token"},
+            }
+        except (JWTError, ValueError):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token.")
+
     session = await crud_auth_sessions.get_session(db, request.cookies.get(settings.AUTH_SESSION_COOKIE_NAME))
     if session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")

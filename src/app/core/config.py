@@ -142,9 +142,16 @@ class EnvironmentSettings(BaseSettings):
 
 
 class CORSSettings(BaseSettings):
-    CORS_ORIGINS: list[str]
-    CORS_METHODS: list[str]
-    CORS_HEADERS: list[str]
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    CORS_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    CORS_HEADERS: list[str] = [
+        "Authorization",
+        "Content-Type",
+        "X-CSRF-Token",
+        "X-Client-Timezone",
+        "X-Client-Date",
+        "X-Client-Timestamp",
+    ]
 
 
 class Settings(

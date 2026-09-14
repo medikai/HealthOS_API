@@ -22,6 +22,7 @@ class UserAccount(Base):
     email: Mapped[str | None] = mapped_column(String(320), default=None)
     display_name: Mapped[str | None] = mapped_column(String(255), default=None)
     avatar_url: Mapped[str | None] = mapped_column(String(2_048), default=None)
+    password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
