@@ -1,7 +1,7 @@
 from .identity import AuthSession, LoginTransaction, UserAccount
 from .identity import Patient, Person
 from .care import (
-    Appointment, AuditLog, Encounter, Practitioner, PractitionerAvailabilityException,
+    Appointment, AuditLog, ClinicalDocumentationSetting, Encounter, Practitioner, PractitionerAvailabilityException,
     PractitionerAvailabilityRule, Prescription, PrescriptionItem, QueueCounter,
     QueueEntry, SoapNote, Vital,
 )

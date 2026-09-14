@@ -2,19 +2,27 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
-from ...models.care import Appointment, Diagnosis, Encounter, Prescription, PrescriptionItem, Practitioner, QueueEntry, SoapNote
+from ...models.care import (
+    Appointment, ClinicalDocumentationSetting, Diagnosis, Encounter, Prescription,
+    PrescriptionItem, Practitioner, QueueEntry, SoapNote,
+)
 from ...models.identity import UserAccount
-from ...schemas.clinical import DiagnosisInput, PrescriptionInput, SoapInput
+from ...schemas.clinical import (
+    DiagnosisInput, DocumentationSettingInput, DocumentationSettingResponse,
+    PrescriptionInput, SoapInput,
+)
 from ...domains.governance.audit import record_audit
+from .bootstrap import _staff_context
 from .scheduling import _scope
 
 router = APIRouter(tags=["clinical"])
+
 
 
 async def _encounter(db: AsyncSession, account: UserAccount, encounter_uuid: UUID) -> Encounter:
@@ -176,3 +184,239 @@ async def complete_encounter(encounter_uuid: UUID, account: Annotated[UserAccoun
             appointment.status = "completed"
     await db.commit()
     return {"success": True, "data": {"uuid": str(encounter.id), "status": encounter.status, "completed_at": encounter.completed_at.isoformat()}, "meta": {}}
+
+
+def _get_default_clinical_settings() -> dict[str, Any]:
+    return {
+        "triage_expanded_default": True,
+        "vitals_config": {
+            "blood_pressure": {"visible": True, "label": "Blood Pressure (BP)", "unit": "mmHg"},
+            "pulse_rate": {"visible": True, "label": "Pulse Rate", "unit": "bpm"},
+            "spo2": {"visible": True, "label": "Oxygen Saturation (SpO₂)", "unit": "%"},
+            "respiratory_rate": {"visible": False, "label": "Respiratory Rate (RR)", "unit": "rpm"},
+            "temperature": {"visible": True, "label": "Temperature", "unit": "°C"},
+            "height": {"visible": True, "label": "Height", "unit": "cm"},
+            "weight": {"visible": True, "label": "Weight", "unit": "kg"},
+            "bmi": {"visible": True, "label": "Calculated BMI", "unit": "kg/m²"},
+        },
+        "soap_config": {
+            "subjective": {
+                "general_notes": {"visible": True, "mandatory": False, "default_state": "expanded"},
+                "chief_complaints": {"visible": True, "mandatory": True, "default_state": "expanded"},
+                "hpi": {"visible": True, "mandatory": False, "default_state": "expanded"},
+                "family_social": {"visible": True, "mandatory": False, "default_state": "collapsed"},
+            },
+            "objective": {
+                "general_exam": {"visible": True, "mandatory": False, "default_state": "expanded"},
+                "systemic_exam": {"visible": True, "mandatory": False, "default_state": "collapsed"},
+                "additional_obs": {"visible": True, "mandatory": False, "default_state": "collapsed"},
+            },
+            "assessment": {
+                "diagnoses": {"visible": True, "mandatory": True, "default_state": "expanded"},
+            },
+            "plan": {
+                "general_plan": {"visible": True, "mandatory": False, "default_state": "expanded"},
+                "prescription_summary": {"visible": True, "mandatory": False, "default_state": "expanded"},
+            },
+        },
+        "custom_sections": [
+            {
+                "key": "lifestyle_notes",
+                "label": "Lifestyle notes",
+                "group": "plan",
+                "helper_text": "Dietary habits, physical activity, and stress management guidance",
+                "required": False,
+                "expanded": False,
+            }
+        ],
+    }
+
+
+def _format_clinical_setting_response(
+    setting: ClinicalDocumentationSetting | None,
+    organization_id: UUID,
+    facility_id: UUID | None,
+) -> dict[str, Any]:
+    defaults = _get_default_clinical_settings()
+    if setting is None:
+        triage_expanded_default = defaults["triage_expanded_default"]
+        vitals_config = defaults["vitals_config"]
+        soap_config = defaults["soap_config"]
+        custom_sections = defaults["custom_sections"]
+        setting_id = None
+    else:
+        setting_id = str(setting.id)
+        triage_expanded_default = setting.triage_expanded_default
+        vitals_config = setting.vitals_config if setting.vitals_config else defaults["vitals_config"]
+        soap_config = setting.soap_config if setting.soap_config else defaults["soap_config"]
+        custom_sections = setting.custom_sections if setting.custom_sections is not None else defaults["custom_sections"]
+
+    summary: list[str] = []
+    rr_cfg = vitals_config.get("respiratory_rate", {})
+    if isinstance(rr_cfg, dict) and not rr_cfg.get("visible", False):
+        summary.append("Respiratory Rate (RR) toggled OFF / omitted from triage")
+
+    subj = soap_config.get("subjective", {})
+    if isinstance(subj, dict):
+        fs = subj.get("family_social", {})
+        if isinstance(fs, dict) and fs.get("visible", False):
+            summary.append("Family & Social History enabled in Subjective")
+
+    obj = soap_config.get("objective", {})
+    if isinstance(obj, dict):
+        se = obj.get("systemic_exam", {})
+        if isinstance(se, dict) and se.get("default_state") == "collapsed":
+            summary.append("Systemic Examination defaulted to Collapsed state")
+
+    for cs in custom_sections:
+        if isinstance(cs, dict) and cs.get("label"):
+            group_name = cs.get("group", "plan").capitalize()
+            summary.append(f"Custom section '{cs.get('label')}' configured under {group_name}")
+
+    return {
+        "id": setting_id,
+        "organization_id": str(organization_id),
+        "facility_id": str(facility_id) if facility_id else None,
+        "triage_expanded_default": triage_expanded_default,
+        "vitals_config": vitals_config,
+        "soap_config": soap_config,
+        "custom_sections": custom_sections,
+        "active_modifications_count": len(summary),
+        "summary": summary,
+    }
+
+
+@router.get("/clinical/documentation-settings")
+@router.get("/clinical/settings")
+async def get_clinical_documentation_settings(
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    facility_uuid: str | None = Query(default=None),
+) -> dict[str, Any]:
+    staff, organization = await _staff_context(db, account)
+
+    target_facility_id: UUID | None = None
+    if facility_uuid and facility_uuid != "all":
+        try:
+            target_facility_id = UUID(str(facility_uuid))
+        except (ValueError, TypeError):
+            pass
+
+    setting = None
+    if target_facility_id:
+        setting = await db.scalar(
+            select(ClinicalDocumentationSetting).where(
+                ClinicalDocumentationSetting.organization_id == organization.id,
+                ClinicalDocumentationSetting.facility_id == target_facility_id,
+            )
+        )
+
+    if setting is None:
+        setting = await db.scalar(
+            select(ClinicalDocumentationSetting).where(
+                ClinicalDocumentationSetting.organization_id == organization.id,
+                ClinicalDocumentationSetting.facility_id.is_(None),
+            )
+        )
+
+    return {
+        "success": True,
+        "data": _format_clinical_setting_response(setting, organization.id, target_facility_id),
+        "meta": {},
+    }
+
+
+@router.put("/clinical/documentation-settings")
+@router.put("/clinical/settings")
+async def update_clinical_documentation_settings(
+    payload: DocumentationSettingInput,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    staff, organization = await _staff_context(db, account)
+
+    target_facility_id: UUID | None = None
+    if payload.facility_uuid and payload.facility_uuid != "all":
+        try:
+            target_facility_id = UUID(str(payload.facility_uuid))
+        except (ValueError, TypeError):
+            pass
+
+    query = select(ClinicalDocumentationSetting).where(
+        ClinicalDocumentationSetting.organization_id == organization.id
+    )
+    if target_facility_id:
+        query = query.where(ClinicalDocumentationSetting.facility_id == target_facility_id)
+    else:
+        query = query.where(ClinicalDocumentationSetting.facility_id.is_(None))
+
+    setting = await db.scalar(query)
+    if setting is None:
+        setting = ClinicalDocumentationSetting(
+            organization_id=organization.id,
+            facility_id=target_facility_id,
+            triage_expanded_default=payload.triage_expanded_default,
+            vitals_config=payload.vitals_config,
+            soap_config=payload.soap_config,
+            custom_sections=[cs.model_dump() for cs in payload.custom_sections],
+        )
+        db.add(setting)
+    else:
+        setting.triage_expanded_default = payload.triage_expanded_default
+        setting.vitals_config = payload.vitals_config
+        setting.soap_config = payload.soap_config
+        setting.custom_sections = [cs.model_dump() for cs in payload.custom_sections]
+        setting.updated_at = datetime.now(UTC)
+
+    await db.commit()
+    await db.refresh(setting)
+
+    return {
+        "success": True,
+        "data": _format_clinical_setting_response(setting, organization.id, target_facility_id),
+        "meta": {},
+    }
+
+
+@router.post("/clinical/documentation-settings/reset")
+@router.post("/clinical/settings/reset")
+async def reset_clinical_documentation_settings(
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    facility_uuid: str | None = Query(default=None),
+) -> dict[str, Any]:
+    staff, organization = await _staff_context(db, account)
+
+    target_facility_id: UUID | None = None
+    if facility_uuid and facility_uuid != "all":
+        try:
+            target_facility_id = UUID(str(facility_uuid))
+        except (ValueError, TypeError):
+            pass
+
+    query = select(ClinicalDocumentationSetting).where(
+        ClinicalDocumentationSetting.organization_id == organization.id
+    )
+    if target_facility_id:
+        query = query.where(ClinicalDocumentationSetting.facility_id == target_facility_id)
+    else:
+        query = query.where(ClinicalDocumentationSetting.facility_id.is_(None))
+
+    setting = await db.scalar(query)
+    defaults = _get_default_clinical_settings()
+
+    if setting is not None:
+        setting.triage_expanded_default = defaults["triage_expanded_default"]
+        setting.vitals_config = defaults["vitals_config"]
+        setting.soap_config = defaults["soap_config"]
+        setting.custom_sections = defaults["custom_sections"]
+        setting.updated_at = datetime.now(UTC)
+        await db.commit()
+        await db.refresh(setting)
+
+    return {
+        "success": True,
+        "data": _format_clinical_setting_response(setting, organization.id, target_facility_id),
+        "meta": {},
+    }
+

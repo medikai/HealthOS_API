@@ -1,7 +1,8 @@
 import uuid as uuid_pkg
 from datetime import UTC, date, datetime, time
+from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from uuid6 import uuid7
@@ -193,3 +194,22 @@ class AuditLog(Base):
     resource_id: Mapped[str | None] = mapped_column(String(128), default=None)
     patient_id: Mapped[str | None] = mapped_column(String(128), default=None)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC), index=True)
+
+
+class ClinicalDocumentationSetting(Base):
+    __tablename__ = "clinical_documentation_setting"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "facility_id", name="uq_care_doc_setting_org_facility"),
+        {"schema": "care"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("organization.facility.id"), nullable=True, default=None, index=True)
+    triage_expanded_default: Mapped[bool] = mapped_column(Boolean, default=True)
+    vitals_config: Mapped[dict[str, Any]] = mapped_column(JSON, default_factory=dict)
+    soap_config: Mapped[dict[str, Any]] = mapped_column(JSON, default_factory=dict)
+    custom_sections: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default_factory=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
