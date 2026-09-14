@@ -19,9 +19,9 @@ class AppSettings(BaseSettings):
 
 class CryptSettings(BaseSettings):
     SECRET_KEY: SecretStr
-    ALGORITHM: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int
-    REFRESH_TOKEN_EXPIRE_DAYS: int
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
 
 class FileLoggerSettings(BaseSettings):
@@ -58,10 +58,10 @@ class PostgresSettings(DatabaseSettings):
 
 
 class FirstUserSettings(BaseSettings):
-    ADMIN_NAME: str
-    ADMIN_EMAIL: str
-    ADMIN_USERNAME: str
-    ADMIN_PASSWORD: str
+    ADMIN_NAME: str = "HealthOS Admin"
+    ADMIN_EMAIL: str = "admin@healthos.local"
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = ""
 
 
 class TestSettings(BaseSettings):
@@ -73,17 +73,17 @@ class ClientSideCacheSettings(BaseSettings):
 
 
 class CRUDAdminSettings(BaseSettings):
-    CRUD_ADMIN_ENABLED: bool
-    CRUD_ADMIN_MOUNT_PATH: str
+    CRUD_ADMIN_ENABLED: bool = False
+    CRUD_ADMIN_MOUNT_PATH: str = "/admin"
 
-    CRUD_ADMIN_ALLOWED_IPS_LIST: list[str]
-    CRUD_ADMIN_ALLOWED_NETWORKS_LIST: list[str]
-    CRUD_ADMIN_MAX_SESSIONS: int
-    CRUD_ADMIN_SESSION_TIMEOUT: int
-    SESSION_SECURE_COOKIES: bool
+    CRUD_ADMIN_ALLOWED_IPS_LIST: list[str] = []
+    CRUD_ADMIN_ALLOWED_NETWORKS_LIST: list[str] = []
+    CRUD_ADMIN_MAX_SESSIONS: int = 10
+    CRUD_ADMIN_SESSION_TIMEOUT: int = 1440
+    SESSION_SECURE_COOKIES: bool = True
 
-    CRUD_ADMIN_TRACK_EVENTS: bool
-    CRUD_ADMIN_TRACK_SESSIONS: bool
+    CRUD_ADMIN_TRACK_EVENTS: bool = False
+    CRUD_ADMIN_TRACK_SESSIONS: bool = False
 
 
 
