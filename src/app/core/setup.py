@@ -186,8 +186,6 @@ def create_application(
             allow_methods=settings.CORS_METHODS,
             allow_headers=settings.CORS_HEADERS,
         )
-    application.add_middleware(LoggerMiddleware)
-    application.add_middleware(CSRFMiddleware)
     if isinstance(settings, EnvironmentSettings):
         if settings.ENVIRONMENT != EnvironmentOption.PRODUCTION:
             docs_router = APIRouter()

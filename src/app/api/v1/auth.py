@@ -98,7 +98,6 @@ async def logout(
 ) -> dict[str, Any]:
     session = await crud_auth_sessions.get_session(db, session_cookie)
     await crud_auth_sessions.delete_session(db, session_cookie)
-    response.delete_cookie(key=settings.AUTH_SESSION_COOKIE_NAME, path="/")
     response.delete_cookie(
         key=settings.AUTH_SESSION_COOKIE_NAME,
         path="/",
