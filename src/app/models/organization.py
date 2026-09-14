@@ -105,3 +105,23 @@ class ProtectedPeriod(Base):
     period_type: Mapped[str] = mapped_column(String(64), default="protected")
     days_of_week: Mapped[str] = mapped_column(Text, default='["monday","tuesday","wednesday","thursday","friday","saturday"]')
     is_recurring: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class StaffInvitation(Base):
+    __tablename__ = "staff_invitation"
+    __table_args__ = {"schema": "organization"}
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    full_name: Mapped[str] = mapped_column(String(255))
+    role_code: Mapped[str] = mapped_column(String(64), index=True)
+    token: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("organization.facility.id"), index=True, default=None
+    )
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+

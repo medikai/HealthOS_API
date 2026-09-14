@@ -5,7 +5,7 @@ from .care import (
     PractitionerAvailabilityRule, Prescription, PrescriptionItem, QueueCounter,
     QueueEntry, SoapNote, Vital,
 )
-from .organization import Department, Facility, FacilitySchedule, Organization, ProtectedPeriod, StaffAssignment, StaffMember
+from .organization import Department, Facility, FacilitySchedule, Organization, ProtectedPeriod, StaffAssignment, StaffInvitation, StaffMember
 from .platform import Feature, FeatureAssignment
 from .post import Post
 from .rate_limit import RateLimit

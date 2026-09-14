@@ -19,3 +19,18 @@ class StaffCreate(BaseModel):
 class StaffUpdate(BaseModel):
     display_name: str | None = None
     email: str | None = None
+
+
+class StaffInviteCreate(BaseModel):
+    email: str
+    full_name: str
+    role_code: str = "practitioner"
+    facility_uuid: UUID | None = None
+    specialty: str | None = None
+
+
+class StaffInviteAccept(BaseModel):
+    token: str
+    password: str
+    full_name: str | None = None
+
