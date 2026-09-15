@@ -1,0 +1,570 @@
+{
+  "info": {
+    "_postman_id": "b3e9447e-8c31-4e2a-89a1-94e82b79e2c1",
+    "name": "HealthOS - SOAP & Clinical Screens API",
+    "description": "Postman Collection covering all endpoints and payload specifications for HealthOS SOAP screens:\n1. Clinical Documentation Settings Administration (/design-preview/clinical-configuration/settings)\n2. Encounter SOAP Consultation Workspace (/design-preview/clinical-configuration/encounter)\n3. Clinical Encounters Production View (/encounters/:id)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.demo_practitioner_token",
+      "type": "string"
+    },
+    {
+      "key": "csrf_token",
+      "value": "csrf_token_demo_9841",
+      "type": "string"
+    },
+    {
+      "key": "encounter_uuid",
+      "value": "0191eb94-e58f-7c70-9750-fba40fdf7401",
+      "type": "string"
+    },
+    {
+      "key": "facility_uuid",
+      "value": "0191eb94-dc3b-7411-bdc1-58380816e866",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Local Session Login (Practitioner)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"dr.vikram.sen@citycare.com\",\n  \"password\": \"ClinicSecure2026!\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/local/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "local", "login"]
+            },
+            "description": "Establishes an authenticated session cookie and returns Bearer access token for clinical calls."
+          },
+          "response": [
+            {
+              "name": "200 OK - Successful Login",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.demo_practitioner_token\",\n    \"token_type\": \"bearer\",\n    \"account\": {\n      \"id\": \"0191eb94-a111-7000-8000-111122223333\",\n      \"email\": \"dr.vikram.sen@citycare.com\",\n      \"display_name\": \"Dr. Vikram Sen\",\n      \"role\": \"practitioner\"\n    }\n  },\n  \"meta\": {\n    \"request_id\": \"req-auth-001\",\n    \"csrf_token\": \"csrf_token_demo_9841\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Clinical Documentation Settings",
+      "item": [
+        {
+          "name": "Get Documentation Settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/clinical/documentation-settings?facility_uuid={{facility_uuid}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "clinical", "documentation-settings"],
+              "query": [
+                {
+                  "key": "facility_uuid",
+                  "value": "{{facility_uuid}}"
+                }
+              ]
+            },
+            "description": "Retrieves the active clinical documentation and SOAP layout configuration for the facility or clinic organization."
+          },
+          "response": [
+            {
+              "name": "200 OK - Active Documentation Settings",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"0191eb94-1111-7000-8000-123456789abc\",\n    \"organization_id\": \"0191eb94-dc3b-7411-bdc1-58380816e866\",\n    \"facility_id\": \"0191eb94-dc3b-7411-bdc1-58380816e866\",\n    \"triage_expanded_default\": true,\n    \"vitals_config\": {\n      \"blood_pressure\": { \"visible\": true, \"label\": \"Blood Pressure (BP)\", \"unit\": \"mmHg\" },\n      \"pulse_rate\": { \"visible\": true, \"label\": \"Pulse Rate\", \"unit\": \"bpm\" },\n      \"spo2\": { \"visible\": true, \"label\": \"Oxygen Saturation (SpO₂)\", \"unit\": \"%\" },\n      \"respiratory_rate\": { \"visible\": false, \"label\": \"Respiratory Rate (RR)\", \"unit\": \"rpm\" },\n      \"temperature\": { \"visible\": true, \"label\": \"Temperature\", \"unit\": \"°C\" },\n      \"height\": { \"visible\": true, \"label\": \"Height\", \"unit\": \"cm\" },\n      \"weight\": { \"visible\": true, \"label\": \"Weight\", \"unit\": \"kg\" },\n      \"bmi\": { \"visible\": true, \"label\": \"Calculated BMI\", \"unit\": \"kg/m²\" }\n    },\n    \"soap_config\": {\n      \"subjective\": {\n        \"general_notes\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"chief_complaints\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" },\n        \"hpi\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"family_social\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"collapsed\" }\n      },\n      \"objective\": {\n        \"general_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"systemic_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"collapsed\" }\n      },\n      \"assessment\": {\n        \"diagnoses\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" }\n      },\n      \"plan\": {\n        \"general_plan\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n      }\n    },\n    \"custom_sections\": [\n      {\n        \"key\": \"lifestyle_notes\",\n        \"label\": \"Lifestyle notes\",\n        \"group\": \"plan\",\n        \"helper_text\": \"Dietary habits, physical activity, and stress management guidance\",\n        \"required\": false,\n        \"expanded\": false\n      }\n    ],\n    \"active_modifications_count\": 4,\n    \"summary\": [\n      \"Respiratory Rate (RR) toggled OFF / omitted from triage\",\n      \"Family & Social History enabled in Subjective\",\n      \"Systemic Examination defaulted to Collapsed state\",\n      \"Custom section 'Lifestyle notes' configured under Plan\"\n    ]\n  },\n  \"meta\": {\n    \"request_id\": \"req-settings-001\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Documentation Settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"facility_uuid\": \"{{facility_uuid}}\",\n  \"triage_expanded_default\": true,\n  \"vitals_config\": {\n    \"blood_pressure\": { \"visible\": true },\n    \"pulse_rate\": { \"visible\": true },\n    \"spo2\": { \"visible\": true },\n    \"respiratory_rate\": { \"visible\": true },\n    \"temperature\": { \"visible\": true },\n    \"height\": { \"visible\": true },\n    \"weight\": { \"visible\": true },\n    \"bmi\": { \"visible\": true }\n  },\n  \"soap_config\": {\n    \"subjective\": {\n      \"general_notes\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n      \"chief_complaints\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" },\n      \"hpi\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" },\n      \"family_social\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n    },\n    \"objective\": {\n      \"general_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n      \"systemic_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n    },\n    \"assessment\": {\n      \"diagnoses\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" }\n    },\n    \"plan\": {\n      \"general_plan\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n    }\n  },\n  \"custom_sections\": [\n    {\n      \"key\": \"lifestyle_notes\",\n      \"label\": \"Lifestyle notes\",\n      \"group\": \"plan\",\n      \"helper_text\": \"Dietary habits, physical activity, and stress management guidance\",\n      \"required\": false,\n      \"expanded\": false\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/clinical/documentation-settings",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "clinical", "documentation-settings"]
+            },
+            "description": "Saves changes made on the Clinical Documentation Settings admin screen."
+          },
+          "response": [
+            {
+              "name": "200 OK - Configuration Saved",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"0191eb94-1111-7000-8000-123456789abc\",\n    \"organization_id\": \"0191eb94-dc3b-7411-bdc1-58380816e866\",\n    \"facility_id\": \"0191eb94-dc3b-7411-bdc1-58380816e866\",\n    \"triage_expanded_default\": true,\n    \"vitals_config\": {\n      \"blood_pressure\": { \"visible\": true },\n      \"pulse_rate\": { \"visible\": true },\n      \"spo2\": { \"visible\": true },\n      \"respiratory_rate\": { \"visible\": true },\n      \"temperature\": { \"visible\": true },\n      \"height\": { \"visible\": true },\n      \"weight\": { \"visible\": true },\n      \"bmi\": { \"visible\": true }\n    },\n    \"soap_config\": {\n      \"subjective\": {\n        \"general_notes\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"chief_complaints\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" },\n        \"hpi\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" },\n        \"family_social\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n      },\n      \"objective\": {\n        \"general_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"systemic_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n      },\n      \"assessment\": {\n        \"diagnoses\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" }\n      },\n      \"plan\": {\n        \"general_plan\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n      }\n    },\n    \"custom_sections\": [\n      {\n        \"key\": \"lifestyle_notes\",\n        \"label\": \"Lifestyle notes\",\n        \"group\": \"plan\",\n        \"helper_text\": \"Dietary habits, physical activity, and stress management guidance\",\n        \"required\": false,\n        \"expanded\": false\n      }\n    ],\n    \"active_modifications_count\": 2,\n    \"summary\": [\n      \"Family & Social History enabled in Subjective\",\n      \"Custom section 'Lifestyle notes' configured under Plan\"\n    ]\n  },\n  \"meta\": {\n    \"request_id\": \"req-settings-002\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Reset Documentation Settings to Baseline",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/clinical/documentation-settings/reset?facility_uuid={{facility_uuid}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "clinical", "documentation-settings", "reset"],
+              "query": [
+                {
+                  "key": "facility_uuid",
+                  "value": "{{facility_uuid}}"
+                }
+              ]
+            },
+            "description": "Restores documentation configuration back to standard HealthOS baseline specifications."
+          },
+          "response": [
+            {
+              "name": "200 OK - Reset Successful",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"0191eb94-1111-7000-8000-123456789abc\",\n    \"organization_id\": \"0191eb94-dc3b-7411-bdc1-58380816e866\",\n    \"facility_id\": \"0191eb94-dc3b-7411-bdc1-58380816e866\",\n    \"triage_expanded_default\": true,\n    \"vitals_config\": {\n      \"blood_pressure\": { \"visible\": true, \"label\": \"Blood Pressure (BP)\", \"unit\": \"mmHg\" },\n      \"pulse_rate\": { \"visible\": true, \"label\": \"Pulse Rate\", \"unit\": \"bpm\" },\n      \"spo2\": { \"visible\": true, \"label\": \"Oxygen Saturation (SpO₂)\", \"unit\": \"%\" },\n      \"respiratory_rate\": { \"visible\": false, \"label\": \"Respiratory Rate (RR)\", \"unit\": \"rpm\" },\n      \"temperature\": { \"visible\": true, \"label\": \"Temperature\", \"unit\": \"°C\" },\n      \"height\": { \"visible\": true, \"label\": \"Height\", \"unit\": \"cm\" },\n      \"weight\": { \"visible\": true, \"label\": \"Weight\", \"unit\": \"kg\" },\n      \"bmi\": { \"visible\": true, \"label\": \"Calculated BMI\", \"unit\": \"kg/m²\" }\n    },\n    \"soap_config\": {\n      \"subjective\": {\n        \"general_notes\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"chief_complaints\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" },\n        \"hpi\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"family_social\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"collapsed\" }\n      },\n      \"objective\": {\n        \"general_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"systemic_exam\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"collapsed\" },\n        \"additional_obs\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"collapsed\" }\n      },\n      \"assessment\": {\n        \"diagnoses\": { \"visible\": true, \"mandatory\": true, \"default_state\": \"expanded\" }\n      },\n      \"plan\": {\n        \"general_plan\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" },\n        \"prescription_summary\": { \"visible\": true, \"mandatory\": false, \"default_state\": \"expanded\" }\n      }\n    },\n    \"custom_sections\": [\n      {\n        \"key\": \"lifestyle_notes\",\n        \"label\": \"Lifestyle notes\",\n        \"group\": \"plan\",\n        \"helper_text\": \"Dietary habits, physical activity, and stress management guidance\",\n        \"required\": false,\n        \"expanded\": false\n      }\n    ],\n    \"active_modifications_count\": 4,\n    \"summary\": [\n      \"Respiratory Rate (RR) toggled OFF / omitted from triage\",\n      \"Family & Social History enabled in Subjective\",\n      \"Systemic Examination defaulted to Collapsed state\",\n      \"Custom section 'Lifestyle notes' configured under Plan\"\n    ]\n  },\n  \"meta\": {\n    \"request_id\": \"req-settings-reset-001\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Encounter SOAP & Clinical Notes",
+      "item": [
+        {
+          "name": "Get Encounter SOAP Note",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/soap",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "soap"]
+            },
+            "description": "Loads the current SOAP clinical note for an encounter."
+          },
+          "response": [
+            {
+              "name": "200 OK - SOAP Note Found",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uuid\": \"0191eb94-e58f-7c70-9750-fba40fdf7402\",\n    \"subjective\": \"Patient presents with persistent tension-type headaches for 2 weeks, exacerbated by prolonged screen time. Mild fatigue, denies nausea or visual disturbances.\\n\\nChief Complaints:\\n• Headache: Bilateral occipital tightness, graded 6/10 on pain scale, worse by 4 PM daily.\\n• Neck stiffness: Related to desk posture; mild upper trapezius tenderness.\\n\\nHPI:\\nGradual onset over 14 days without focal neurological deficits, aura, photophobia, or phonophobia. Responds partially to OTC paracetamol.\\n\\nFamily & Social History:\\nMother has history of migraine; non-smoker, sedentary desk work, drinks 1 cup coffee/day.\",\n    \"objective\": \"Alert, oriented x3, well-nourished, no acute distress. Pupils equal and reactive.\\n\\n--- PULLED TRIAGE TELEMETRY ---\\n• Blood Pressure: 118/78 mmHg (Optimal)\\n• Pulse: 72 bpm (Normal)\\n• SpO₂: 99% (Room Air)\\n• Temperature: 36.6°C (Afebrile)\\n• Height: 162 cm | Weight: 58 kg\\n• BMI: 22.1 kg/m² (Normal Range)\",\n    \"assessment\": \"Tension-type headache associated with occupational postural strain.\",\n    \"plan\": \"Ergonomic workspace adjustment, 20-20-20 screen rest rule, adequate hydration (>2L/day).\\n\\nLifestyle Guidance:\\nEncouraged 30 min daily brisk walking. Advised reduction in evening caffeine intake and hourly neck stretches.\",\n    \"status\": \"draft\",\n    \"signed_at\": null\n  },\n  \"meta\": {\n    \"request_id\": \"req-soap-001\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Save / Update SOAP Note Draft",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subjective\": \"Patient presents with persistent tension-type headaches for 2 weeks, exacerbated by prolonged screen time. Mild fatigue, denies nausea or visual disturbances.\\n\\nChief Complaints:\\n• Headache: Bilateral occipital tightness, graded 6/10 on pain scale, worse by 4 PM daily.\\n• Neck stiffness: Related to desk posture; mild upper trapezius tenderness.\",\n  \"objective\": \"Alert, oriented x3, well-nourished, no acute distress. Pupils equal and reactive.\\n\\n--- PULLED TRIAGE TELEMETRY ---\\n• Blood Pressure: 118/78 mmHg (Optimal)\\n• Pulse: 72 bpm (Normal)\\n• SpO₂: 99% (Room Air)\\n• Temperature: 36.6°C (Afebrile)\\n• BMI: 22.1 kg/m² (Normal Range)\",\n  \"assessment\": \"Tension-type headache associated with occupational postural strain.\",\n  \"plan\": \"Ergonomic workspace adjustment, 20-20-20 screen rest rule, adequate hydration (>2L/day).\\n\\nLifestyle Guidance:\\nEncouraged 30 min daily brisk walking. Advised reduction in evening caffeine intake and hourly neck stretches.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/soap",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "soap"]
+            },
+            "description": "Upserts the SOAP clinical draft for the encounter. Idempotent across consultation steps."
+          },
+          "response": [
+            {
+              "name": "200 OK - Draft Saved",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uuid\": \"0191eb94-e58f-7c70-9750-fba40fdf7402\",\n    \"subjective\": \"Patient presents with persistent tension-type headaches for 2 weeks...\",\n    \"objective\": \"Alert, oriented x3, well-nourished, no acute distress...\",\n    \"assessment\": \"Tension-type headache associated with occupational postural strain.\",\n    \"plan\": \"Ergonomic workspace adjustment, 20-20-20 screen rest rule...\",\n    \"status\": \"draft\",\n    \"signed_at\": null\n  },\n  \"meta\": {\n    \"request_id\": \"req-soap-save-001\"\n  }\n}"
+            },
+            {
+              "name": "409 Conflict - Note Already Signed",
+              "status": "Conflict",
+              "code": 409,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"NOTE_ALREADY_SIGNED\",\n    \"message\": \"Signed SOAP notes require an amendment workflow.\",\n    \"details\": []\n  },\n  \"meta\": {\n    \"request_id\": \"req-soap-err-001\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Sign & Attest SOAP Note (Step 3 Attestation)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/soap/sign",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "soap", "sign"]
+            },
+            "description": "Signs and cryptographically locks the SOAP clinical record with practitioner identity and UTC timestamp."
+          },
+          "response": [
+            {
+              "name": "200 OK - SOAP Note Signed",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uuid\": \"0191eb94-e58f-7c70-9750-fba40fdf7402\",\n    \"subjective\": \"Patient presents with persistent tension-type headaches for 2 weeks...\",\n    \"objective\": \"Alert, oriented x3, well-nourished, no acute distress...\",\n    \"assessment\": \"Tension-type headache associated with occupational postural strain.\",\n    \"plan\": \"Ergonomic workspace adjustment, 20-20-20 screen rest rule...\",\n    \"status\": \"signed\",\n    \"signed_at\": \"2026-09-15T12:00:00.000Z\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-soap-sign-001\"\n  }\n}"
+            },
+            {
+              "name": "400 Bad Request - Missing Draft",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"SOAP_DRAFT_REQUIRED\",\n    \"message\": \"SOAP draft is required before signing.\",\n    \"details\": []\n  },\n  \"meta\": {\n    \"request_id\": \"req-soap-err-002\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Diagnoses (ICD-10)",
+      "item": [
+        {
+          "name": "Get Encounter Diagnoses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/diagnoses",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "diagnoses"]
+            },
+            "description": "Lists all active ICD-10 diagnostic codes attached to this clinical encounter."
+          },
+          "response": [
+            {
+              "name": "200 OK - Diagnoses List",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"uuid\": \"0191eb94-dddd-7000-8000-111122223333\",\n        \"code\": \"G44.209\",\n        \"description\": \"Tension-type headache, unspecified\",\n        \"is_primary\": true\n      }\n    ]\n  },\n  \"meta\": {\n    \"request_id\": \"req-diag-001\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Replace / Update Encounter Diagnoses",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "[\n  {\n    \"code\": \"G44.209\",\n    \"description\": \"Tension-type headache, unspecified\",\n    \"is_primary\": true\n  },\n  {\n    \"code\": \"M54.2\",\n    \"description\": \"Cervicalgia\",\n    \"is_primary\": false\n  }\n]"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/diagnoses",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "diagnoses"]
+            },
+            "description": "Replaces the encounter's diagnosis list with the provided set of ICD-10 codes."
+          },
+          "response": [
+            {
+              "name": "200 OK - Diagnoses Updated",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"uuid\": \"0191eb94-dddd-7000-8000-111122223333\",\n        \"code\": \"G44.209\",\n        \"description\": \"Tension-type headache, unspecified\",\n        \"is_primary\": true\n      },\n      {\n        \"uuid\": \"0191eb94-dddd-7000-8000-444455556666\",\n        \"code\": \"M54.2\",\n        \"description\": \"Cervicalgia\",\n        \"is_primary\": false\n      }\n    ]\n  },\n  \"meta\": {\n    \"request_id\": \"req-diag-002\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Linked Triage Telemetry Vitals",
+      "item": [
+        {
+          "name": "Get Encounter Triage Vitals",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/vitals",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "vitals"]
+            },
+            "description": "Fetches recorded triage vitals to display and sync via 'Pull Vitals' into the Objective section."
+          },
+          "response": [
+            {
+              "name": "200 OK - Recorded Triage Vitals",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"uuid\": \"0191eb94-aaaa-7000-8000-123456789abc\",\n        \"systolic_bp_mmhg\": 118,\n        \"diastolic_bp_mmhg\": 78,\n        \"pulse_bpm\": 72,\n        \"respiratory_rate_per_min\": 16,\n        \"spo2_percent\": 99.0,\n        \"temperature_c\": 36.6,\n        \"height_cm\": 162.0,\n        \"weight_kg\": 58.0,\n        \"recorded_at\": \"2026-09-15T09:15:00Z\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"request_id\": \"req-vitals-001\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Prescriptions & Discharge Orders",
+      "item": [
+        {
+          "name": "Create Encounter Prescription (Step 4)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"advice\": \"Drink adequate fluids (>2L/day). Follow 20-20-20 screen rest rule. Return in 2 weeks SOS if symptoms persist.\",\n  \"items\": [\n    {\n      \"medication_name\": \"Paracetamol 500mg tablet\",\n      \"dosage\": \"500mg\",\n      \"frequency\": \"TDS PRN\",\n      \"duration_days\": 3,\n      \"instructions\": \"Take after meals when pain exceeds 4/10.\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/prescriptions",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "prescriptions"]
+            },
+            "description": "Creates prescription order linked to the encounter care plan."
+          },
+          "response": [
+            {
+              "name": "200 OK - Prescription Created",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uuid\": \"0191eb94-bbbb-7000-8000-123456789abc\",\n    \"status\": \"draft\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-rx-001\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Complete Encounter & Discharge (Step 5)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/encounters/{{encounter_uuid}}/complete",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "encounters", "{{encounter_uuid}}", "complete"]
+            },
+            "description": "Finalizes the encounter, advances lifecycle to 'completed', and unlocks discharge slip."
+          },
+          "response": [
+            {
+              "name": "200 OK - Encounter Completed",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uuid\": \"0191eb94-e58f-7c70-9750-fba40fdf7401\",\n    \"status\": \"completed\",\n    \"ended_at\": \"2026-09-15T12:05:00.000Z\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-enc-complete-001\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
