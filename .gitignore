@@ -145,6 +145,9 @@ src/.env
 
 # Don't ignore files inside of script folder:
 !scripts/*
-docs/
+docs/*
+!docs/API_STATUS.md
+!docs/*.json
+!docs/*.pdf
 AGENTS.md
 
