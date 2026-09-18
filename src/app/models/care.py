@@ -2,7 +2,19 @@ import uuid as uuid_pkg
 from datetime import UTC, date, datetime, time
 from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, JSON, String, Text, Time, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    Time,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from uuid6 import uuid7
@@ -25,7 +37,11 @@ class Practitioner(Base):
 
 class Appointment(Base):
     __tablename__ = "appointment"
-    __table_args__ = (UniqueConstraint("organization_id", "idempotency_key", name="uq_appointment_org_idempotency"), {"schema": "care"})
+    __table_args__ = (
+        UniqueConstraint("organization_id", "idempotency_key", name="uq_appointment_org_idempotency"),
+        Index("ix_care_appointment_facility_status_start", "facility_id", "status", "scheduled_start"),
+        {"schema": "care"},
+    )
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
@@ -85,7 +101,10 @@ class QueueCounter(Base):
 
 class QueueEntry(Base):
     __tablename__ = "queue_entry"
-    __table_args__ = {"schema": "care"}
+    __table_args__ = (
+        Index("ix_care_queue_entry_facility_date_status", "facility_id", "queue_date", "status"),
+        {"schema": "care"},
+    )
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
@@ -127,6 +146,7 @@ class Vital(Base):
     recorded_by_user_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.user_account.id"), index=True)
     name: Mapped[str] = mapped_column(String(64))
     value: Mapped[str] = mapped_column(String(64))
+    recording_id: Mapped[uuid_pkg.UUID | None] = mapped_column(UUID(as_uuid=True), default=None, index=True)
     unit: Mapped[str | None] = mapped_column(String(32), default=None)
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 
@@ -141,6 +161,7 @@ class SoapNote(Base):
     objective: Mapped[str | None] = mapped_column(Text, default=None)
     assessment: Mapped[str | None] = mapped_column(Text, default=None)
     plan: Mapped[str | None] = mapped_column(Text, default=None)
+    custom_fields: Mapped[dict[str, str | None]] = mapped_column(JSON, default_factory=dict)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     signed_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None)
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -179,6 +200,11 @@ class PrescriptionItem(Base):
     dosage: Mapped[str] = mapped_column(String(128))
     frequency: Mapped[str] = mapped_column(String(128))
     duration: Mapped[str] = mapped_column(String(128))
+    strength: Mapped[str | None] = mapped_column(String(128), default=None)
+    brand: Mapped[str | None] = mapped_column(String(255), default=None)
+    route: Mapped[str | None] = mapped_column(String(64), default=None)
+    timing: Mapped[str | None] = mapped_column(String(128), default=None)
+    instructions: Mapped[str | None] = mapped_column(Text, default=None)
 
 
 class AuditLog(Base):
@@ -212,4 +238,3 @@ class ClinicalDocumentationSetting(Base):
     custom_sections: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default_factory=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-

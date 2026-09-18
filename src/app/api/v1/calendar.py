@@ -1,14 +1,20 @@
+import json
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from ...api.dependencies import get_current_identity_account
+from ...core.appointment_views import appointment_view
 from ...core.db.database import async_get_db
+from ...core.timezones import DEFAULT_TIMEZONE, timezone, to_timezone, to_utc
 from ...models.care import Appointment, Practitioner
 from ...models.identity import UserAccount
-from .scheduling import _scope
+from ...models.organization import FacilitySchedule
+from .scheduling import _appointment_query, _scope
 
 router = APIRouter(tags=["scheduling"])
 
@@ -27,6 +33,16 @@ async def calendar(facility_uuid: str | None = None, from_datetime: datetime = Q
         facility_uuid = facility_uuids.split(",")[0]
     if facility_uuid is None:
         raise ValueError("facility_uuid or facility_uuids is required")
-    await _scope(db, account, facility_uuid)
-    values = (await db.scalars(select(Appointment).where(Appointment.facility_id == facility_uuid, Appointment.scheduled_start >= from_datetime, Appointment.scheduled_start < to_datetime).order_by(Appointment.scheduled_start))).all()
-    return {"success": True, "data": {"facility_uuids": [str(facility_uuid)], "facility_uuid": str(facility_uuid), "timezone": "Asia/Kolkata", "facility_schedule": {"operating_start": "08:00", "operating_end": "20:00", "slot_interval_minutes": 30, "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]}, "protected_periods": [], "from": from_datetime.isoformat(), "to": to_datetime.isoformat(), "items": [{"event_type": "appointment", "uuid": str(a.id), "facility_uuid": str(a.facility_id), "patient_uuid": str(a.patient_id), "practitioner_uuid": str(a.practitioner_id), "title": f"Appointment - {a.status}", "start": a.scheduled_start.isoformat(), "end": a.scheduled_end.isoformat(), "status": "confirmed" if a.status == "booked" else a.status} for a in values]}, "meta": {}}
+    organization, facility = await _scope(db, account, facility_uuid)
+    schedule = await db.scalar(select(FacilitySchedule).where(FacilitySchedule.facility_id == facility.id))
+    tz = timezone(schedule.timezone if schedule else DEFAULT_TIMEZONE)
+    from_utc, to_utc_value = to_utc(from_datetime, tz), to_utc(to_datetime, tz)
+    query = _appointment_query(organization.id).where(Appointment.facility_id == facility.id, Appointment.scheduled_start >= from_utc, Appointment.scheduled_start < to_utc_value)
+    rows = (await db.execute(query.order_by(Appointment.scheduled_start))).all()
+    schedule_data = {"operating_start": schedule.operating_start if schedule else "08:00", "operating_end": schedule.operating_end if schedule else "20:00", "slot_interval_minutes": schedule.slot_interval_minutes if schedule else 30, "days_of_week": json.loads(schedule.days_of_week) if schedule else ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"], "timezone": tz.key}
+    items = []
+    for row in rows:
+        item = appointment_view(*row)
+        item.update({"event_type": "appointment", "title": f"{item['patient']['display_name']} - {item['status']}" if item["patient"] else f"Appointment - {item['status']}", "start": to_timezone(row[0].scheduled_start, tz).isoformat(), "end": to_timezone(row[0].scheduled_end, tz).isoformat(), "status": "confirmed" if item["status"] == "booked" else item["status"]})
+        items.append(item)
+    return {"success": True, "data": {"facility_uuids": [str(facility.id)], "facility_uuid": str(facility.id), "timezone": tz.key, "facility_schedule": schedule_data, "protected_periods": [], "from": to_timezone(from_utc, tz).isoformat(), "to": to_timezone(to_utc_value, tz).isoformat(), "items": items}, "meta": {}}

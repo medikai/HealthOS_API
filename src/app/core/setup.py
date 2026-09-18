@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator, Callable
 from contextlib import _AsyncGeneratorContextManager, asynccontextmanager
 from typing import Any
+from uuid import uuid4
 
 import anyio
 import fastapi
@@ -10,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
-from uuid import uuid4
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from ..api.dependencies import get_current_superuser
 from ..middleware.client_cache_middleware import ClientCacheMiddleware
@@ -24,7 +25,6 @@ from .config import (
     DatabaseSettings,
     EnvironmentOption,
     EnvironmentSettings,
-    settings,
 )
 from .db.database import Base
 from .db.database import async_engine as engine
@@ -158,14 +158,22 @@ def create_application(
     @application.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
         code_by_status = {400: "BAD_REQUEST", 401: "AUTHENTICATION_REQUIRED", 403: "FORBIDDEN", 404: "NOT_FOUND", 409: "CONFLICT", 429: "RATE_LIMITED"}
-        detail = exc.detail if isinstance(exc.detail, str) else "Request failed."
-        return JSONResponse(status_code=exc.status_code, content={"success": False, "error": {"code": code_by_status.get(exc.status_code, "REQUEST_FAILED"), "message": detail, "details": []}, "meta": {"request_id": request_id(request)}})
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        message = exc.detail if isinstance(exc.detail, str) else detail.get("message", "Request failed.")
+        code = detail.get("code", code_by_status.get(exc.status_code, "REQUEST_FAILED"))
+        return JSONResponse(status_code=exc.status_code, content={"success": False, "error": {"code": code, "message": message, "details": detail.get("details", [])}, "meta": {"request_id": request_id(request)}})
 
     @application.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:
         import logging
         logging.getLogger(__name__).exception("Unhandled request error", exc_info=exc)
         return JSONResponse(status_code=500, content={"success": False, "error": {"code": "INTERNAL_ERROR", "message": "An unexpected error occurred.", "details": []}, "meta": {"request_id": request_id(request)}})
+
+    @application.exception_handler(SQLAlchemyTimeoutError)
+    async def database_pool_timeout(request: Request, exc: SQLAlchemyTimeoutError) -> JSONResponse:
+        import logging
+        logging.getLogger(__name__).error("Database connection pool timeout", exc_info=exc)
+        return JSONResponse(status_code=503, content={"success": False, "error": {"code": "DATABASE_TIMEOUT", "message": "The database is temporarily unavailable.", "details": []}, "meta": {"request_id": request_id(request)}})
 
     application.include_router(router)
 

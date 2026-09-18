@@ -1,7 +1,15 @@
 import uuid as uuid_pkg
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from uuid6 import uuid7
@@ -26,6 +34,7 @@ class Facility(Base):
     __tablename__ = "facility"
     __table_args__ = (
         UniqueConstraint("organization_id", "code", name="uq_facility_organization_code"),
+        Index("ix_organization_facility_org_active", "organization_id", "is_active"),
         {"schema": "organization"},
     )
 
@@ -68,7 +77,11 @@ class StaffMember(Base):
 
 class StaffAssignment(Base):
     __tablename__ = "staff_assignment"
-    __table_args__ = (UniqueConstraint("staff_member_id", "role_code", name="uq_staff_assignment_member_role"), {"schema": "organization"})
+    __table_args__ = (
+        UniqueConstraint("staff_member_id", "role_code", name="uq_staff_assignment_member_role"),
+        Index("ix_organization_staff_assignment_facility_active", "facility_id", "is_active", "role_code"),
+        {"schema": "organization"},
+    )
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     staff_member_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.staff_member.id"), index=True)

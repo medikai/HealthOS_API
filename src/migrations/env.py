@@ -17,7 +17,7 @@ config = context.config
 
 config.set_main_option(
     "sqlalchemy.url",
-    settings.POSTGRES_ASYNC_URL,
+    settings.POSTGRES_ASYNC_URL.replace("-pooler.", "."),
 )
 
 if config.config_file_name is not None:

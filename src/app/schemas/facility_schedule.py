@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class FacilityScheduleInput(BaseModel):
@@ -7,6 +9,15 @@ class FacilityScheduleInput(BaseModel):
     slot_interval_minutes: int = Field(default=30, ge=5, le=240)
     days_of_week: list[str]
     timezone: str = "Asia/Kolkata"
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError:
+            raise ValueError("timezone must be a valid IANA timezone") from None
+        return value
 
 
 class ProtectedPeriodInput(BaseModel):

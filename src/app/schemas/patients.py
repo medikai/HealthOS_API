@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class PatientCreate(BaseModel):
@@ -9,6 +11,13 @@ class PatientCreate(BaseModel):
     date_of_birth: str | None = None
     gender: str | None = None
     person: "PatientCreate | None" = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_nested_person(cls, value: Any) -> Any:
+        if isinstance(value, dict) and isinstance(value.get("person"), dict):
+            return value["person"]
+        return value
 
     def normalized(self) -> "PatientCreate":
         return self.person or self
