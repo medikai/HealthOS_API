@@ -1,7 +1,7 @@
 """add foreign key indexes to care and organization tables
 
-Revision ID: 20260919_12
-Revises: 20260914_11
+Revision ID: 20260919_16
+Revises: 20260918_15
 Create Date: 2026-09-19 15:42:00.000000
 
 """
@@ -10,8 +10,8 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = "20260919_12"
-down_revision: Union[str, None] = "20260914_11"
+revision: str = "20260919_16"
+down_revision: Union[str, None] = "20260918_15"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

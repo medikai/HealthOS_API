@@ -61,7 +61,7 @@ async def check_indexes():
 
     if missing:
         print(f"\nTo apply the missing {len(missing)} indexes, run:")
-        print("    uv run alembic upgrade head")
+        print("    cd src && uv run alembic upgrade head")
     else:
         print("\nAll 10 foreign key indexes are active and verified!")
     print("=" * 70)
