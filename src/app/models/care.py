@@ -163,7 +163,7 @@ class SoapNote(Base):
     plan: Mapped[str | None] = mapped_column(Text, default=None)
     custom_fields: Mapped[dict[str, str | None]] = mapped_column(JSON, default_factory=dict)
     status: Mapped[str] = mapped_column(String(32), default="draft")
-    signed_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None)
+    signed_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None, index=True)
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
@@ -186,7 +186,7 @@ class Prescription(Base):
     encounter_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("care.encounter.id"), index=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     advice: Mapped[str | None] = mapped_column(Text, default=None)
-    signed_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None)
+    signed_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None, index=True)
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 

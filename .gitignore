@@ -150,4 +150,6 @@ docs/*
 !docs/*.json
 !docs/*.pdf
 AGENTS.md
+backup.dump
+
 
