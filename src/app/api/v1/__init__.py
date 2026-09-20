@@ -15,6 +15,7 @@ from .staff import router as staff_router
 from .frontend_compat import router as frontend_compat_router
 from .facility_schedule import router as facility_schedule_router
 from .events import router as events_router
+from .masters import router as masters_router
 
 router = APIRouter(prefix="/v1")
 router.include_router(health_router)
@@ -32,3 +33,5 @@ router.include_router(staff_router)
 router.include_router(frontend_compat_router)
 router.include_router(facility_schedule_router)
 router.include_router(events_router)
+router.include_router(masters_router)
+

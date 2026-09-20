@@ -81,23 +81,3 @@ async def facility_stats(facility_uuid: str, account: Annotated[UserAccount, Dep
     scheduled, completed = metrics.scheduled_today, metrics.completed_today
     data = {"facility_uuid": facility_uuid, "scheduled_today": scheduled, "confirmed_count": metrics.confirmed_count, "pending_count": metrics.pending_count, "in_waiting_room": metrics.in_waiting_room, "avg_wait_minutes": 0, "in_consultation": metrics.in_consultation, "active_doctors_count": metrics.active_doctors_count, "completed_today": completed, "throughput_pct": round(completed / scheduled * 1000) / 10 if scheduled else 0, "walk_ins_today": metrics.walk_ins_today, "walk_ins_waiting": metrics.walk_ins_waiting, "mean_turnaround_mins": 0}
     return {"success": True, "data": data, "meta": {}}
-
-
-@router.get("/masters/visit-reasons")
-async def visit_reasons() -> dict[str, Any]:
-    return {"success": True, "data": {"items": [{"code": "examination", "name": "Examination"}, {"code": "follow_up", "name": "Follow-up"}, {"code": "prescription_renewal", "name": "Prescription renewal"}, {"code": "custom", "name": "Custom"}]}, "meta": {}}
-
-
-@router.get("/masters/specialties")
-async def specialties() -> dict[str, Any]:
-    return {"success": True, "data": {"items": [{"code": "general_medicine", "name": "General Medicine"}, {"code": "orthopaedics", "name": "Orthopaedics"}, {"code": "paediatrics", "name": "Paediatrics"}]}, "meta": {}}
-
-
-@router.get("/masters/staff-designations")
-async def staff_designations() -> dict[str, Any]:
-    return {"success": True, "data": {"items": [{"code": "entry_operator", "name": "Entry operator"}, {"code": "assistant", "name": "Assistant"}, {"code": "practitioner", "name": "Practitioner"}, {"code": "administrator", "name": "Administrator"}]}, "meta": {}}
-
-
-@router.get("/masters/access-roles")
-async def access_roles() -> dict[str, Any]:
-    return {"success": True, "data": {"items": [{"key": "organization_admin"}, {"key": "facility_operator"}, {"key": "clinical_practitioner"}]}, "meta": {}}

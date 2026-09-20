@@ -23,6 +23,7 @@ router = APIRouter(tags=["bootstrap"])
 ADMIN_ROLES = ("administrator", "organization_admin", "owner")
 ROLE_SCOPES = {
     "organization_admin": {
+        "appointment:exception",
         "appointment:write",
         "clinical:author",
         "patient:read",
@@ -30,6 +31,7 @@ ROLE_SCOPES = {
         "rx:signer",
     },
     "administrator": {
+        "appointment:exception",
         "appointment:write",
         "clinical:author",
         "patient:read",
@@ -37,6 +39,7 @@ ROLE_SCOPES = {
         "rx:signer",
     },
     "owner": {
+        "appointment:exception",
         "appointment:write",
         "clinical:author",
         "patient:read",

@@ -106,6 +106,20 @@ class FacilitySchedule(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
 
 
+class FacilityResource(Base):
+    __tablename__ = "facility_resource"
+    __table_args__ = (
+        UniqueConstraint("facility_id", "name", name="uq_organization_facility_resource"),
+        {"schema": "organization"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    facility_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.facility.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    resource_type: Mapped[str] = mapped_column(String(64), default="room")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class ProtectedPeriod(Base):
     __tablename__ = "protected_period"
     __table_args__ = {"schema": "organization"}
@@ -134,6 +148,16 @@ class StaffInvitation(Base):
     facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
         ForeignKey("organization.facility.id"), index=True, default=None
     )
+    specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("platform.specialty.id"), index=True, default=None
+    )
+    sub_specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("platform.sub_specialty.id"), index=True, default=None
+    )
+    designation_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("platform.staff_designation.id"), index=True, default=None
+    )
+    medical_council_reg_no: Mapped[str | None] = mapped_column(String(100), default=None)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
