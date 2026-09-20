@@ -1,0 +1,659 @@
+{
+  "info": {
+    "_postman_id": "healthos-staff-invitation-flow-2026",
+    "name": "HealthOS - Staff Invitation & Onboarding Flow",
+    "description": "Dedicated end-to-end lifecycle collection for Staff Invitations, Token Validation, Account Acceptance/Provisioning, and Post-Acceptance Session Verification. Pre-configured with automatic variable propagation (invitation_token, staff_access_token) and complete saved responses for every step.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "Backend API base URL"
+    },
+    {
+      "key": "admin_access_token",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.sample-admin-token",
+      "type": "string",
+      "description": "Admin Bearer token"
+    },
+    {
+      "key": "csrf_token",
+      "value": "sample-csrf-token",
+      "type": "string",
+      "description": "CSRF Token"
+    },
+    {
+      "key": "facility_uuid",
+      "value": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+      "type": "string",
+      "description": "Target Facility UUID"
+    },
+    {
+      "key": "invited_email",
+      "value": "dr.sarah.smith@example.com",
+      "type": "string",
+      "description": "Email address of invited practitioner"
+    },
+    {
+      "key": "invitation_token",
+      "value": "dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu",
+      "type": "string",
+      "description": "Invitation token dynamically extracted from Step 1"
+    },
+    {
+      "key": "staff_access_token",
+      "value": "sample-staff-access-token-step4",
+      "type": "string",
+      "description": "Access token dynamically extracted from Step 4"
+    },
+    {
+      "key": "new_staff_uuid",
+      "value": "f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66",
+      "type": "string",
+      "description": "New staff UUID from Step 4"
+    }
+  ],
+  "item": [
+    {
+      "name": "Phase 1: Admin Invitation Actions",
+      "description": "Administrator creates and manages pending staff invitations.",
+      "item": [
+        {
+          "name": "01. [Admin] Send Staff Invitation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    if (jsonData.data && jsonData.data.token) {",
+                  "        pm.collectionVariables.set('invitation_token', jsonData.data.token);",
+                  "        console.log('\u2705 Captured invitation_token:', jsonData.data.token);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/staff/invitations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "staff",
+                "invitations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{invited_email}}\",\n  \"full_name\": \"Dr. Sarah Smith\",\n  \"role_code\": \"practitioner\",\n  \"facility_uuid\": \"{{facility_uuid}}\",\n  \"specialty\": \"Cardiology\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Admin generates a new staff invitation with role assignment and target facility. Generates a secure URL-safe 7-day token and invite link."
+          },
+          "response": [
+            {
+              "name": "Invitation Created (201 Created)",
+              "status": "Created",
+              "code": 201,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7b0a8c23-4e89-4a90-b184-904d9c79e612\",\n    \"email\": \"dr.sarah.smith@example.com\",\n    \"full_name\": \"Dr. Sarah Smith\",\n    \"role_code\": \"practitioner\",\n    \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n    \"token\": \"dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\",\n    \"expires_at\": \"2026-09-27T10:00:00Z\",\n    \"status\": \"pending\",\n    \"invite_url\": \"/staff/accept?token=dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-001\"\n  }\n}"
+            },
+            {
+              "name": "Forbidden: Non-Admin Caller (403 Forbidden)",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"FORBIDDEN\",\n    \"message\": \"Staff administration access is required.\",\n    \"details\": []\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-err-403\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "02. [Admin] List Pending Invitations",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/staff/invitations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "staff",
+                "invitations"
+              ]
+            },
+            "description": "Admin retrieves all sent invitations and their current status (pending, accepted, expired)."
+          },
+          "response": [
+            {
+              "name": "Active Invitations List (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"id\": \"7b0a8c23-4e89-4a90-b184-904d9c79e612\",\n        \"email\": \"dr.sarah.smith@example.com\",\n        \"full_name\": \"Dr. Sarah Smith\",\n        \"role_code\": \"practitioner\",\n        \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n        \"status\": \"pending\",\n        \"token\": \"dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\",\n        \"expires_at\": \"2026-09-27T10:00:00Z\",\n        \"created_at\": \"2026-09-20T10:00:00Z\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"count\": 1,\n    \"request_id\": \"req-inv-002\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Phase 2: Invited Staff Acceptance",
+      "description": "Invited doctor or staff member opens the email link, validates token, sets password, and receives authenticated credentials.",
+      "item": [
+        {
+          "name": "03. [Invited User] Validate Invitation Token (Public Link)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/staff/invitations/validate?token={{invitation_token}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "staff",
+                "invitations",
+                "validate"
+              ],
+              "query": [
+                {
+                  "key": "token",
+                  "value": "{{invitation_token}}",
+                  "description": "Invitation verification token"
+                }
+              ]
+            },
+            "description": "Public verification endpoint called when user clicks the invite email link. Checks expiry and displays clinic name and assigned facility."
+          },
+          "response": [
+            {
+              "name": "Valid Token (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"valid\": true,\n    \"email\": \"dr.sarah.smith@example.com\",\n    \"full_name\": \"Dr. Sarah Smith\",\n    \"role_code\": \"practitioner\",\n    \"organization_name\": \"Apex Health Systems\",\n    \"organization_id\": \"01a0b95c-3fed-785a-95e0-48cc8d07f2ee\",\n    \"facility_name\": \"Apex Main Hospital\",\n    \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n    \"expires_at\": \"2026-09-27T10:00:00Z\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-003\"\n  }\n}"
+            },
+            {
+              "name": "Invalid or Expired Token (404/400)",
+              "status": "Not Found",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"NOT_FOUND\",\n    \"message\": \"Invitation not found or invalid.\",\n    \"details\": []\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-err-404\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "04. [Invited User] Accept Invitation & Set Password",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    var jsonData = pm.response.json();",
+                  "    if (jsonData.data && jsonData.data.access_token) {",
+                  "        pm.collectionVariables.set('staff_access_token', jsonData.data.access_token);",
+                  "        pm.collectionVariables.set('new_staff_uuid', jsonData.data.user.uuid);",
+                  "        console.log('\u2705 Captured staff_access_token and user uuid:', jsonData.data.user.uuid);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/staff/invitations/accept",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "staff",
+                "invitations",
+                "accept"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{invitation_token}}\",\n  \"password\": \"SecurePassword123!\",\n  \"full_name\": \"Dr. Sarah Smith\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Public acceptance endpoint. Provisions UserAccount, activates StaffMember, links Practitioner record, and returns immediate Bearer access token."
+          },
+          "response": [
+            {
+              "name": "Invitation Accepted & Provisioned (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"access_token\": \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.sample-new-staff-token\",\n    \"token_type\": \"bearer\",\n    \"user\": {\n      \"uuid\": \"01a0b95f-1234-7890-abcd-ef0123456789\",\n      \"email\": \"dr.sarah.smith@example.com\",\n      \"display_name\": \"Dr. Sarah Smith\",\n      \"role_code\": \"practitioner\"\n    }\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-004\"\n  }\n}"
+            },
+            {
+              "name": "Already Accepted or Expired (400 Bad Request)",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"BAD_REQUEST\",\n    \"message\": \"Invitation has already been accepted.\",\n    \"details\": []\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-err-400\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Phase 3: Post-Acceptance Verification",
+      "description": "Using the newly minted staff_access_token, verify session context and accessible facilities.",
+      "item": [
+        {
+          "name": "05. [Invited User] Verify Authenticated Session (/auth/me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staff_access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Verifies that the new staff member is fully authenticated and retrieves organization, roles, and CSRF token."
+          },
+          "response": [
+            {
+              "name": "Session Verified (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"user\": {\n      \"uuid\": \"01a0b95f-1234-7890-abcd-ef0123456789\",\n      \"email\": \"dr.sarah.smith@example.com\",\n      \"display_name\": \"Dr. Sarah Smith\",\n      \"role\": \"practitioner\",\n      \"is_active\": true\n    },\n    \"organization\": {\n      \"uuid\": \"01a0b95c-3fed-785a-95e0-48cc8d07f2ee\",\n      \"name\": \"Apex Health Systems\",\n      \"code\": \"APEX_HEALTH\"\n    },\n    \"facilities\": [\n      {\n        \"uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n        \"name\": \"Apex Main Hospital\",\n        \"code\": \"MAIN_01\",\n        \"is_primary\": true\n      }\n    ],\n    \"roles\": [\n      \"practitioner\"\n    ],\n    \"csrf_token\": \"sample-csrf-token-smith\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-005\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "06. [Invited User] Fetch Assigned Facilities",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{staff_access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/facilities",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "facilities"
+              ]
+            },
+            "description": "Lists facilities assigned to the accepted staff member."
+          },
+          "response": [
+            {
+              "name": "Facilities List (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n        \"name\": \"Apex Main Hospital\",\n        \"code\": \"MAIN_01\",\n        \"address\": \"123 Healthcare Ave, Suite 100\",\n        \"timezone\": \"Asia/Kolkata\",\n        \"is_active\": true,\n        \"is_primary\": true\n      }\n    ]\n  },\n  \"meta\": {\n    \"count\": 1,\n    \"request_id\": \"req-inv-006\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Phase 4: Admin Staff Management",
+      "description": "Admin verifies the newly accepted staff in the roster, updates assignments, or deactivates.",
+      "item": [
+        {
+          "name": "07. [Admin] Inspect Staff Roster",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_access_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/staff",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff"
+              ]
+            },
+            "description": "Admin lists all staff members in the organization."
+          },
+          "response": [
+            {
+              "name": "Staff Roster (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"uuid\": \"f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66\",\n        \"user_uuid\": \"01a0b95c-3fed-785a-95e0-48cc8d07f2ef\",\n        \"display_name\": \"Dr. Nitin Shukla\",\n        \"email\": \"chilledoutnick@gmail.com\",\n        \"status\": \"active\",\n        \"role_codes\": [\n          \"doctor\",\n          \"organization_admin\"\n        ],\n        \"facility_uuids\": [\n          \"01a0b95d-d330-7887-8462-7dc6a0190fb8\"\n        ]\n      },\n      {\n        \"uuid\": \"f6eebc99-9c0b-4ef8-bb6d-6bb9bd380a77\",\n        \"user_uuid\": \"01a0b95f-1234-7890-abcd-ef0123456789\",\n        \"display_name\": \"Dr. Sarah Smith\",\n        \"email\": \"dr.sarah.smith@example.com\",\n        \"status\": \"active\",\n        \"role_codes\": [\n          \"practitioner\"\n        ],\n        \"facility_uuids\": [\n          \"01a0b95d-d330-7887-8462-7dc6a0190fb8\"\n        ]\n      }\n    ]\n  },\n  \"meta\": {\n    \"count\": 2,\n    \"request_id\": \"req-inv-007\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "08. [Admin] Update Staff Facility Assignments",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/staff/:staff_uuid/assignments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                ":staff_uuid",
+                "assignments"
+              ],
+              "variable": [
+                {
+                  "key": "staff_uuid",
+                  "value": "{{new_staff_uuid}}",
+                  "description": "Target Staff UUID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"assignments\": [\n    \"{{facility_uuid}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Admin replaces assigned facilities for the staff member."
+          },
+          "response": [
+            {
+              "name": "Assignments Updated (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"facility_uuids\": [\n      \"01a0b95d-d330-7887-8462-7dc6a0190fb8\"\n    ]\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-008\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "09. [Admin] Deactivate Staff Member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{admin_access_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-CSRF-Token",
+                "value": "{{csrf_token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/admin/staff/:staff_uuid/deactivate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "staff",
+                ":staff_uuid",
+                "deactivate"
+              ],
+              "variable": [
+                {
+                  "key": "staff_uuid",
+                  "value": "{{new_staff_uuid}}",
+                  "description": "Target Staff UUID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Admin deactivates staff member and all active facility assignments."
+          },
+          "response": [
+            {
+              "name": "Staff Deactivated (200 OK)",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"uuid\": \"f6eebc99-9c0b-4ef8-bb6d-6bb9bd380a77\",\n    \"status\": \"inactive\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-009\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

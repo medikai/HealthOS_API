@@ -5,11 +5,31 @@
 
 ## 📊 Summary Statistics
 
-- **Total API Endpoints / Operations**: 100
+- **Total API Endpoints / Operations**: 102
 - **Total Unique API Routes**: 81
 - **Architecture Schemas in Use**: `identity`, `organization`, `platform`, `care`, `governance`
 - **Authentication Model**: Logto Backend-For-Frontend (BFF) Authorization-Code flow with secure HTTP-only cookies (`healthos_session`) and `X-CSRF-Token` protection.
-- **Postman Collection**: [`docs/HealthOS_All_APIs.postman_collection.json`](HealthOS_All_APIs.postman_collection.json)
+- **Postman Collections Available**:
+  1. 📦 [Complete API Collection (78 Endpoints)](HealthOS_All_APIs.postman_collection.json)
+  2. 🔗 [Dedicated Staff Invitation & Onboarding Flow Collection](HealthOS_Staff_Invitation_Flow.postman_collection.json)
+
+---
+
+## 🔄 Dedicated Staff Invitation & Onboarding Flow
+
+The invitation and onboarding flow is isolated into a standalone Postman collection with automatic variable extraction:
+
+| Step | Actor | Action | Endpoint | Description |
+|:---|:---|:---|:---|:---|
+| 1 | Admin | Send Staff Invitation | `POST /api/v1/staff/invitations` | Generates 7-day token; extracts `{{invitation_token}}` |
+| 2 | Admin | View Pending Invitations | `GET /api/v1/staff/invitations` | Lists all pending invitations |
+| 3 | Invited Staff | Validate Token | `GET /api/v1/staff/invitations/validate?token=...` | Public validation with org/facility details |
+| 4 | Invited Staff | Accept & Set Password | `POST /api/v1/staff/invitations/accept` | Provisions user; extracts `{{staff_access_token}}` |
+| 5 | Invited Staff | Verify Profile | `GET /api/v1/auth/me` | Confirms permissions and assigned roles |
+| 6 | Invited Staff | List Facilities | `GET /api/v1/facilities` | Lists accessible clinics |
+| 7 | Admin | View Roster | `GET /api/v1/admin/staff` | Confirms staff member status is active |
+| 8 | Admin | Update Assignments | `PUT /api/v1/admin/staff/:staff_uuid/assignments` | Assigns clinic facilities |
+| 9 | Admin | Deactivate Staff | `POST /api/v1/admin/staff/:staff_uuid/deactivate` | Revokes staff access |
 
 ---
 
@@ -24,7 +44,7 @@
 | **05. Patients** | 7 | ✅ Complete | `identity.patient`, `identity.person`, `care.encounter` | BFF Cookie (`healthos_session`) + CSRF |
 | **06. Scheduling & Appointments** | 12 | ✅ Complete | `care.appointment`, `care.availability_rule`, `organization.practitioner` | BFF Cookie (`healthos_session`) + CSRF |
 | **07. Queue & Walk-ins** | 7 | ✅ Complete | `care.queue_entry`, `care.appointment`, `identity.patient` | BFF Cookie (`healthos_session`) + CSRF |
-| **08. Encounters & Clinical Notes (SOAP)** | 16 | ✅ Complete | `care.encounter`, `care.clinical_note`, `care.diagnosis`, `care.vital`, `care.prescription` | BFF Cookie (`healthos_session`) + CSRF |
+| **08. Encounters & Clinical Notes (SOAP)** | 18 | ✅ Complete | `care.encounter`, `care.clinical_note`, `care.diagnosis`, `care.vital`, `care.prescription` | BFF Cookie (`healthos_session`) + CSRF |
 | **09. Clinical Documentation Settings** | 6 | ✅ Complete | `care.clinical_documentation_setting` | BFF Cookie (`healthos_session`) + CSRF |
 | **10. Dashboard & Analytics** | 6 | ✅ Complete | `care`, `organization`, `identity` (Read aggregations) | BFF Cookie (`healthos_session`) + CSRF |
 | **11. Staff Administration & Invitations** | 17 | ✅ Complete | `organization.staff_member`, `organization.staff_assignment`, `organization.invitation`, `identity.user_account` | BFF Cookie / CSRF |
@@ -135,7 +155,9 @@
 | `POST` | `/api/v1/encounters/{encounter_uuid}/complete` | Complete Encounter | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/encounters/{encounter_uuid}/diagnoses` | Get Diagnoses | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `PUT` | `/api/v1/encounters/{encounter_uuid}/diagnoses` | Replace Diagnoses | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `PUT` | `/api/v1/encounters/{encounter_uuid}/prescriptions` | Create Prescription | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `POST` | `/api/v1/encounters/{encounter_uuid}/prescriptions` | Create Prescription | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/encounters/{encounter_uuid}/prescriptions` | Get Encounter Prescription | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/encounters/{encounter_uuid}/soap` | Get Soap | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `POST` | `/api/v1/encounters/{encounter_uuid}/soap` | Upsert Soap | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `PUT` | `/api/v1/encounters/{encounter_uuid}/soap` | Upsert Soap | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
@@ -272,7 +294,7 @@
 ## 🚀 How to Import into Postman
 
 1. Open Postman -> **Import** (Top left).
-2. Select file: `docs/HealthOS_All_APIs.postman_collection.json`.
+2. Select file: `docs/HealthOS_All_APIs.postman_collection.json` (or `docs/HealthOS_Staff_Invitation_Flow.postman_collection.json`).
 3. In the collection settings, configure the `base_url` variable (defaults to `http://localhost:8000`).
-4. Call `POST /api/v1/auth/local/login` to authenticate and acquire the `healthos_session` cookie.
+4. Call `POST /api/v1/auth/local/login` to authenticate and acquire the `healthos_session` cookie or set `auth_token`.
 5. Set your `csrf_token` variable from `GET /api/v1/auth/me` to authorize state-changing requests.
