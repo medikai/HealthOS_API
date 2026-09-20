@@ -27,6 +27,12 @@ class StaffInviteCreate(BaseModel):
     role_code: str = "practitioner"
     facility_uuid: UUID | None = None
     specialty: str | None = None
+    specialty_id: UUID | None = None
+    sub_specialty_id: UUID | None = None
+    designation_id: UUID | None = None
+    medical_council_reg_no: str | None = None
+    has_prescription_authority: bool = True
+
 
 
 class StaffInviteAccept(BaseModel):

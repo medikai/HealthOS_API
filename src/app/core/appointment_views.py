@@ -38,6 +38,7 @@ def appointment_view(
         "facility_uuid": str(appointment.facility_id),
         "patient_uuid": str(appointment.patient_id),
         "practitioner_uuid": str(appointment.practitioner_id),
+        "resource_uuid": str(resource_id) if (resource_id := getattr(appointment, "resource_id", None)) else None,
         "patient": patient_view(patient, person),
         "practitioner": practitioner_view(practitioner),
         "scheduled_start": appointment.scheduled_start.isoformat(),

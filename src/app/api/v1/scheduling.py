@@ -9,36 +9,64 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...api.dependencies import get_current_identity_account
 from ...core.appointment_views import appointment_view
+from ...core.availability import evaluate_availability, validate_interval
 from ...core.db.database import async_get_db
 from ...core.timezones import (
     DEFAULT_TIMEZONE,
-    local_datetime,
     normalize_range,
     timezone,
+    to_timezone,
 )
+from ...domains.governance.audit import record_audit
 from ...models.care import (
     Appointment,
+    AppointmentBookingException,
     Practitioner,
     PractitionerAvailabilityException,
     PractitionerAvailabilityRule,
 )
+from ...models.masters import Specialty, StaffDesignation, SubSpecialty
 from ...models.identity import Patient, Person, UserAccount
 from ...models.organization import (
     Facility,
+    FacilityResource,
     FacilitySchedule,
     Organization,
     StaffAssignment,
     StaffMember,
 )
+from ...schemas.masters import PractitionerCreate, PractitionerUpdate
 from ...schemas.scheduling import (
     AppointmentCreate,
     AppointmentReschedule,
     AvailabilityExceptionInput,
     AvailabilityRuleInput,
+    ExceptionBookingCreate,
 )
 from .bootstrap import ADMIN_ROLES, _staff_context
 
+
 router = APIRouter(tags=["scheduling"])
+EXCEPTION_BOOKING_ROLES = {"administrator", "organization_admin", "owner"}
+
+
+def _availability_http_error(exc: ValueError, *, prefix: str = "") -> HTTPException:
+    code, separator, message = str(exc).partition("|")
+    if not separator:
+        code, message = "INVALID_INTERVAL", str(exc)
+    return HTTPException(status_code=409 if code != "INVALID_INTERVAL" else 422, detail={"code": code, "message": f"{prefix}{message}", "details": [{"availability_status": code}]})
+
+
+async def _require_exception_booking_permission(db: AsyncSession, account: UserAccount, organization_id: UUID) -> None:
+    permitted = await db.scalar(select(StaffAssignment.id).join(StaffMember).where(
+        StaffMember.user_account_id == account.id,
+        StaffMember.organization_id == organization_id,
+        StaffMember.is_active.is_(True),
+        StaffAssignment.is_active.is_(True),
+        StaffAssignment.role_code.in_(EXCEPTION_BOOKING_ROLES),
+    ))
+    if permitted is None:
+        raise HTTPException(status_code=403, detail={"code": "EXCEPTION_BOOKING_PERMISSION_REQUIRED", "message": "Exception booking permission is required."})
 
 
 async def _facility_timezone(db: AsyncSession, facility_uuid: UUID):
@@ -171,6 +199,41 @@ async def _scope(
     return organization, None
 
 
+async def _practitioner_payload(db: AsyncSession, p: Practitioner) -> dict[str, Any]:
+    spec_name = None
+    sub_spec_name = None
+    desig_name = None
+    if p.specialty_id:
+        s = await db.get(Specialty, p.specialty_id)
+        if s:
+            spec_name = s.name
+    if p.sub_specialty_id:
+        sub = await db.get(SubSpecialty, p.sub_specialty_id)
+        if sub:
+            sub_spec_name = sub.name
+    if p.designation_id:
+        d = await db.get(StaffDesignation, p.designation_id)
+        if d:
+            desig_name = d.name
+
+    return {
+        "uuid": str(p.id),
+        "name": p.person_name,
+        "specialty": p.specialty or spec_name,
+        "specialty_id": str(p.specialty_id) if p.specialty_id else None,
+        "specialty_name": spec_name,
+        "sub_specialty_id": str(p.sub_specialty_id) if p.sub_specialty_id else None,
+        "sub_specialty_name": sub_spec_name,
+        "designation_id": str(p.designation_id) if p.designation_id else None,
+        "designation_name": desig_name,
+        "medical_council_reg_no": p.medical_council_reg_no,
+        "has_prescription_authority": p.has_prescription_authority,
+        "prescription_authority_status": p.prescription_authority_status,
+        "organization_uuid": str(p.organization_id),
+        "is_active": getattr(p, "is_active", True),
+    }
+
+
 @router.get("/practitioners")
 async def practitioners(
     account: Annotated[UserAccount, Depends(get_current_identity_account)],
@@ -179,7 +242,13 @@ async def practitioners(
 ) -> dict[str, Any]:
     requested = facility_uuid is not None and str(facility_uuid).lower() != "all"
     facility = None
-    query = select(Practitioner).where(Practitioner.is_active.is_(True))
+    query = (
+        select(Practitioner, Specialty.name, SubSpecialty.name, StaffDesignation.name)
+        .outerjoin(Specialty, Specialty.id == Practitioner.specialty_id)
+        .outerjoin(SubSpecialty, SubSpecialty.id == Practitioner.sub_specialty_id)
+        .outerjoin(StaffDesignation, StaffDesignation.id == Practitioner.designation_id)
+        .where(Practitioner.is_active.is_(True))
+    )
     if requested:
         organization, facility = await _scope(db, account, facility_uuid)
         query = query.where(Practitioner.organization_id == organization.id)
@@ -196,15 +265,127 @@ async def practitioners(
                 )
             )
         )
-    items = [
-        {"uuid": str(p.id), "name": p.person_name, "specialty": p.specialty}
-        for p in (await db.scalars(query)).all()
-    ]
+    rows = (await db.execute(query)).all()
+    items = []
+    for p, spec_name, sub_spec_name, desig_name in rows:
+        items.append({
+            "uuid": str(p.id),
+            "name": p.person_name,
+            "specialty": p.specialty or spec_name,
+            "specialty_id": str(p.specialty_id) if p.specialty_id else None,
+            "specialty_name": spec_name,
+            "sub_specialty_id": str(p.sub_specialty_id) if p.sub_specialty_id else None,
+            "sub_specialty_name": sub_spec_name,
+            "designation_id": str(p.designation_id) if p.designation_id else None,
+            "designation_name": desig_name,
+            "medical_council_reg_no": p.medical_council_reg_no,
+            "has_prescription_authority": p.has_prescription_authority,
+            "prescription_authority_status": p.prescription_authority_status,
+            "organization_uuid": str(p.organization_id),
+            "is_active": getattr(p, "is_active", True),
+        })
     return {
         "success": True,
         "data": {"items": items},
-        "meta": {"facility_uuid": str(facility.id) if facility else None},
+        "meta": {"count": len(items), "facility_uuid": str(facility.id) if facility else None},
     }
+
+
+@router.post("/practitioners", status_code=status.HTTP_201_CREATED)
+async def create_practitioner(
+    payload: PractitionerCreate,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    _, organization = await _staff_context(db, account)
+    org_id = payload.organization_id or organization.id
+
+    spec_name = payload.specialty
+    if payload.specialty_id and not spec_name:
+        spec = await db.get(Specialty, payload.specialty_id)
+        if spec:
+            spec_name = spec.name
+
+    practitioner = Practitioner(
+        organization_id=org_id,
+        person_name=payload.person_name,
+        specialty=spec_name,
+        specialty_id=payload.specialty_id,
+        sub_specialty_id=payload.sub_specialty_id,
+        designation_id=payload.designation_id,
+        medical_council_reg_no=payload.medical_council_reg_no,
+        has_prescription_authority=payload.has_prescription_authority,
+        prescription_authority_status=payload.prescription_authority_status,
+        user_account_id=payload.user_account_id,
+        is_active=True,
+    )
+    db.add(practitioner)
+    await record_audit(
+        db,
+        organization_id=org_id,
+        actor_user_id=account.id,
+        action="practitioner.created",
+        resource_type="practitioner",
+        resource_id=practitioner.id,
+    )
+    await db.commit()
+    await db.refresh(practitioner)
+    data = await _practitioner_payload(db, practitioner)
+    return {"success": True, "data": data, "meta": {}}
+
+
+@router.patch("/practitioners/{practitioner_uuid}")
+async def update_practitioner(
+    practitioner_uuid: UUID,
+    payload: PractitionerUpdate,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    _, organization = await _staff_context(db, account)
+    practitioner = await db.scalar(
+        select(Practitioner).where(
+            Practitioner.id == practitioner_uuid,
+            Practitioner.organization_id == organization.id,
+        )
+    )
+    if practitioner is None:
+        raise HTTPException(status_code=404, detail="Practitioner not found.")
+
+    if payload.person_name is not None:
+        practitioner.person_name = payload.person_name
+    if payload.specialty_id is not None:
+        practitioner.specialty_id = payload.specialty_id
+        spec = await db.get(Specialty, payload.specialty_id)
+        if spec:
+            practitioner.specialty = spec.name
+    elif payload.specialty is not None:
+        practitioner.specialty = payload.specialty
+    if payload.sub_specialty_id is not None:
+        practitioner.sub_specialty_id = payload.sub_specialty_id
+    if payload.designation_id is not None:
+        practitioner.designation_id = payload.designation_id
+    if payload.medical_council_reg_no is not None:
+        practitioner.medical_council_reg_no = payload.medical_council_reg_no
+    if payload.has_prescription_authority is not None:
+        practitioner.has_prescription_authority = payload.has_prescription_authority
+    if payload.prescription_authority_status is not None:
+        practitioner.prescription_authority_status = payload.prescription_authority_status
+    if payload.is_active is not None:
+        practitioner.is_active = payload.is_active
+
+    await record_audit(
+        db,
+        organization_id=organization.id,
+        actor_user_id=account.id,
+        action="practitioner.updated",
+        resource_type="practitioner",
+        resource_id=practitioner.id,
+    )
+    await db.commit()
+    await db.refresh(practitioner)
+    data = await _practitioner_payload(db, practitioner)
+    return {"success": True, "data": data, "meta": {}}
+
 
 
 @router.get("/scheduling/availability-rules")
@@ -233,6 +414,7 @@ async def availability_rules(
             "slot_duration_minutes": r.slot_duration_minutes,
             "valid_from": r.valid_from.isoformat(),
             "valid_until": r.valid_until.isoformat() if r.valid_until else None,
+            "resource_uuid": str(r.resource_id) if r.resource_id else None,
         }
         for r in rules
     ]
@@ -287,6 +469,13 @@ async def create_availability_exception(
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
     organization, _ = await _scope(db, account, payload.facility_uuid)
+    practitioner_id = await db.scalar(select(Practitioner.id).where(
+        Practitioner.id == payload.practitioner_uuid,
+        Practitioner.organization_id == organization.id,
+        Practitioner.is_active.is_(True),
+    ).with_for_update())
+    if practitioner_id is None:
+        raise HTTPException(status_code=404, detail="Practitioner not found.")
     value = PractitionerAvailabilityException(
         organization_id=organization.id,
         facility_id=payload.facility_uuid,
@@ -312,6 +501,7 @@ async def delete_availability_exception(
     if value is None:
         raise HTTPException(status_code=404, detail="Availability exception not found.")
     await _scope(db, account, value.facility_id)
+    await db.scalar(select(Practitioner.id).where(Practitioner.id == value.practitioner_id).with_for_update())
     await db.delete(value)
     await db.commit()
     return {"success": True, "data": {}, "meta": {}}
@@ -324,27 +514,53 @@ async def replace_availability_rule(
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
     organization, _ = await _scope(db, account, payload.facility_uuid)
+    # ponytail: facility row lock favors correctness; use per-schedule advisory locks if booking throughput becomes a bottleneck.
+    await db.scalar(select(Facility.id).where(Facility.id == payload.facility_uuid).with_for_update())
     practitioner = await db.scalar(
         select(Practitioner).where(
             Practitioner.id == payload.practitioner_uuid,
             Practitioner.organization_id == organization.id,
             Practitioner.is_active.is_(True),
-        )
+        ).with_for_update()
     )
     if practitioner is None:
         raise HTTPException(status_code=404, detail="Practitioner not found.")
-    rule = PractitionerAvailabilityRule(
-        organization_id=organization.id,
-        facility_id=payload.facility_uuid,
-        practitioner_id=payload.practitioner_uuid,
-        weekday=payload.weekday,
-        start_time=payload.start_time,
-        end_time=payload.end_time,
-        slot_duration_minutes=payload.slot_duration_minutes,
-        valid_from=payload.valid_from,
-        valid_until=payload.valid_until,
+    if payload.resource_uuid and await db.scalar(select(FacilityResource.id).where(
+        FacilityResource.id == payload.resource_uuid,
+        FacilityResource.facility_id == payload.facility_uuid,
+        FacilityResource.is_active.is_(True),
+    )) is None:
+        raise HTTPException(status_code=404, detail="Facility room/resource not found.")
+    existing_rule = await db.scalar(
+        select(PractitionerAvailabilityRule).where(
+            PractitionerAvailabilityRule.facility_id == payload.facility_uuid,
+            PractitionerAvailabilityRule.practitioner_id == payload.practitioner_uuid,
+            PractitionerAvailabilityRule.weekday == payload.weekday,
+            PractitionerAvailabilityRule.start_time == payload.start_time,
+        ).with_for_update()
     )
-    db.add(rule)
+    if existing_rule:
+        existing_rule.end_time = payload.end_time
+        existing_rule.slot_duration_minutes = payload.slot_duration_minutes
+        existing_rule.valid_from = payload.valid_from
+        existing_rule.valid_until = payload.valid_until
+        existing_rule.resource_id = payload.resource_uuid
+        existing_rule.status = "active"
+        rule = existing_rule
+    else:
+        rule = PractitionerAvailabilityRule(
+            organization_id=organization.id,
+            facility_id=payload.facility_uuid,
+            practitioner_id=payload.practitioner_uuid,
+            weekday=payload.weekday,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+            slot_duration_minutes=payload.slot_duration_minutes,
+            valid_from=payload.valid_from,
+            valid_until=payload.valid_until,
+            resource_id=payload.resource_uuid,
+        )
+        db.add(rule)
     await db.commit()
     return {"success": True, "data": {"uuid": str(rule.id)}, "meta": {}}
 
@@ -360,53 +576,14 @@ async def next_slots(
     organization, _ = await _scope(db, account, facility_uuid)
     tz = await _facility_timezone(db, facility_uuid)
     from_date = from_date or datetime.now(tz).date()
-    rules = (
-        await db.scalars(
-            select(PractitionerAvailabilityRule).where(
-                PractitionerAvailabilityRule.organization_id == organization.id,
-                PractitionerAvailabilityRule.facility_id == facility_uuid,
-                PractitionerAvailabilityRule.practitioner_id == practitioner_uuid,
-                PractitionerAvailabilityRule.status == "active",
-            )
-        )
-    ).all()
-    appointments = (
-        await db.scalars(
-            select(Appointment).where(
-                Appointment.organization_id == organization.id,
-                Appointment.facility_id == facility_uuid,
-                Appointment.practitioner_id == practitioner_uuid,
-                Appointment.status.in_(["booked", "checked_in", "in_consultation"]),
-                Appointment.scheduled_start
-                >= local_datetime(from_date, datetime.min.time(), tz),
-            )
-        )
-    ).all()
-    occupied = {(a.scheduled_start, a.scheduled_end) for a in appointments}
     slots: list[str] = []
+    days: list[dict[str, Any]] = []
     for offset in range(14):
         day = from_date + timedelta(days=offset)
-        for rule in rules:
-            if (
-                day.weekday() != rule.weekday
-                or day < rule.valid_from
-                or (rule.valid_until and day > rule.valid_until)
-            ):
-                continue
-            current = local_datetime(day, rule.start_time, tz)
-            end = local_datetime(day, rule.end_time, tz)
-            while (
-                current + timedelta(minutes=rule.slot_duration_minutes) <= end
-                and len(slots) < 20
-            ):
-                slot_end = current + timedelta(minutes=rule.slot_duration_minutes)
-                if not any(
-                    current < busy_end and slot_end > busy_start
-                    for busy_start, busy_end in occupied
-                ):
-                    slots.append(current.isoformat())
-                current = slot_end
-    return {"success": True, "data": {"slots": slots}, "meta": {}}
+        result = await evaluate_availability(db, organization_id=organization.id, facility_id=facility_uuid, practitioner_id=practitioner_uuid, day=day)
+        days.append({key: result[key] for key in ("date", "status", "reason")})
+        slots.extend(slot["start"] for slot in result["usable_slots"][:20 - len(slots)])
+    return {"success": True, "data": {"slots": slots, "availability": days}, "meta": {}}
 
 
 @router.post("/appointments", status_code=status.HTTP_201_CREATED)
@@ -416,13 +593,14 @@ async def create_appointment(
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
     organization, _ = await _scope(db, account, payload.facility_uuid)
+    await db.scalar(select(Facility.id).where(Facility.id == payload.facility_uuid).with_for_update())
     tz = await _facility_timezone(db, payload.facility_uuid)
     practitioner = await db.scalar(
         select(Practitioner).where(
             Practitioner.id == payload.practitioner_uuid,
             Practitioner.organization_id == organization.id,
             Practitioner.is_active.is_(True),
-        )
+        ).with_for_update()
     )
     patient = await db.scalar(
         select(Patient).where(
@@ -441,6 +619,18 @@ async def create_appointment(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    try:
+        resource_id = await validate_interval(
+            db,
+            organization_id=organization.id,
+            facility_id=payload.facility_uuid,
+            practitioner_id=payload.practitioner_uuid,
+            start=scheduled_start,
+            end=scheduled_end,
+            resource_id=payload.resource_uuid,
+        )
+    except ValueError as exc:
+        raise _availability_http_error(exc) from None
     appointment = Appointment(
         organization_id=organization.id,
         facility_id=payload.facility_uuid,
@@ -448,6 +638,7 @@ async def create_appointment(
         patient_id=payload.patient_uuid,
         scheduled_start=scheduled_start,
         scheduled_end=scheduled_end,
+        resource_id=resource_id,
         reason_code=payload.reason_code,
         reason_text=payload.reason_text,
         idempotency_key=payload.idempotency_key,
@@ -458,7 +649,7 @@ async def create_appointment(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
-            status_code=409, detail="The appointment slot is no longer available."
+            status_code=409, detail={"code": "SLOT_UNAVAILABLE", "message": "The appointment or required room/resource is no longer available."}
         ) from None
     return {
         "success": True,
@@ -467,9 +658,120 @@ async def create_appointment(
             "status": appointment.status,
             "scheduled_start": appointment.scheduled_start.isoformat(),
             "scheduled_end": appointment.scheduled_end.isoformat(),
+            "resource_uuid": str(appointment.resource_id) if appointment.resource_id else None,
         },
         "meta": {},
     }
+
+
+@router.post("/appointments/exception-bookings", status_code=status.HTTP_201_CREATED)
+async def create_exception_booking(
+    payload: ExceptionBookingCreate,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization, _ = await _scope(db, account, payload.facility_uuid)
+    await _require_exception_booking_permission(db, account, organization.id)
+    await db.scalar(select(Facility.id).where(Facility.id == payload.facility_uuid).with_for_update())
+    practitioner = await db.scalar(select(Practitioner).where(
+        Practitioner.id == payload.practitioner_uuid,
+        Practitioner.organization_id == organization.id,
+        Practitioner.is_active.is_(True),
+    ).with_for_update())
+    patient = await db.scalar(select(Patient).where(
+        Patient.id == payload.patient_uuid,
+        Patient.organization_id == organization.id,
+        Patient.is_active.is_(True),
+    ))
+    if practitioner is None or patient is None:
+        raise HTTPException(status_code=404, detail="Practitioner or patient not found.")
+    facility_tz = await _facility_timezone(db, payload.facility_uuid)
+    try:
+        scheduled_start, scheduled_end = normalize_range(payload.scheduled_start, payload.scheduled_end, facility_tz)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if to_timezone(scheduled_start, facility_tz).date() < datetime.now(facility_tz).date():
+        raise HTTPException(status_code=422, detail={"code": "PAST_INTERVAL", "message": "Exception bookings cannot be made for past dates."})
+
+    ordinary_failure = None
+    try:
+        await validate_interval(
+            db,
+            organization_id=organization.id,
+            facility_id=payload.facility_uuid,
+            practitioner_id=payload.practitioner_uuid,
+            start=scheduled_start,
+            end=scheduled_end,
+            resource_id=payload.resource_uuid,
+        )
+    except ValueError as exc:
+        ordinary_failure = str(exc).partition("|")[0]
+    if ordinary_failure is None:
+        raise HTTPException(status_code=409, detail={"code": "EXCEPTION_NOT_REQUIRED", "message": "The requested interval is ordinarily bookable; use POST /appointments."})
+    required_override = {
+        "FACILITY_CLOSED": "facility_closed",
+        "DOCTOR_UNAVAILABLE": "practitioner_off_hours",
+        "MISSING_CONFIGURATION": "practitioner_off_hours",
+    }.get(ordinary_failure)
+    if required_override not in payload.override_types:
+        raise HTTPException(status_code=409, detail={"code": ordinary_failure, "message": "The requested exception does not authorize the availability restriction."})
+    try:
+        resource_id = await validate_interval(
+            db,
+            organization_id=organization.id,
+            facility_id=payload.facility_uuid,
+            practitioner_id=payload.practitioner_uuid,
+            start=scheduled_start,
+            end=scheduled_end,
+            resource_id=payload.resource_uuid,
+            allowed_overrides=set(payload.override_types),
+        )
+    except ValueError as exc:
+        raise _availability_http_error(exc) from None
+
+    appointment = Appointment(
+        organization_id=organization.id,
+        facility_id=payload.facility_uuid,
+        practitioner_id=payload.practitioner_uuid,
+        patient_id=payload.patient_uuid,
+        scheduled_start=scheduled_start,
+        scheduled_end=scheduled_end,
+        resource_id=resource_id,
+        reason_code=payload.reason_code,
+        reason_text=payload.reason_text or payload.reason,
+        idempotency_key=payload.idempotency_key,
+    )
+    db.add(appointment)
+    booking_exception = AppointmentBookingException(
+        appointment_id=appointment.id,
+        organization_id=organization.id,
+        facility_id=payload.facility_uuid,
+        practitioner_id=payload.practitioner_uuid,
+        patient_id=payload.patient_uuid,
+        scheduled_start=scheduled_start,
+        scheduled_end=scheduled_end,
+        override_types=list(dict.fromkeys(payload.override_types)),
+        reason=payload.reason,
+        doctor_agreement_recorded=payload.doctor_agreement_recorded,
+        actor_user_id=account.id,
+    )
+    db.add(booking_exception)
+    await record_audit(
+        db,
+        organization_id=organization.id,
+        actor_user_id=account.id,
+        action="appointment.exception_booked",
+        resource_type="appointment",
+        resource_id=appointment.id,
+        facility_id=payload.facility_uuid,
+        patient_id=payload.patient_uuid,
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail={"code": "SLOT_UNAVAILABLE", "message": "The appointment or required room/resource is no longer available."}) from None
+    return {"success": True, "data": {"uuid": str(appointment.id), "status": appointment.status, "scheduled_start": appointment.scheduled_start.isoformat(), "scheduled_end": appointment.scheduled_end.isoformat(), "resource_uuid": str(appointment.resource_id) if appointment.resource_id else None, "exception": {"uuid": str(booking_exception.id), "override_types": list(dict.fromkeys(payload.override_types)), "reason": payload.reason, "doctor_agreement_recorded": True, "actor_user_uuid": str(account.id), "recorded_at": booking_exception.created_at.isoformat()}}, "meta": {}}
 
 
 @router.get("/appointments")
@@ -510,24 +812,40 @@ async def reschedule_appointment(
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found.")
     await _scope(db, account, appointment.facility_id)
+    await db.scalar(select(Facility.id).where(Facility.id == appointment.facility_id).with_for_update())
     if appointment.status not in {"booked", "checked_in"}:
         raise HTTPException(
             status_code=409, detail="Appointment cannot be rescheduled."
         )
     try:
-        appointment.scheduled_start, appointment.scheduled_end = normalize_range(
+        scheduled_start, scheduled_end = normalize_range(
             payload.scheduled_start,
             payload.scheduled_end,
             await _facility_timezone(db, appointment.facility_id),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    await db.scalar(select(Practitioner.id).where(Practitioner.id == appointment.practitioner_id).with_for_update())
+    try:
+        resource_id = await validate_interval(
+            db,
+            organization_id=appointment.organization_id,
+            facility_id=appointment.facility_id,
+            practitioner_id=appointment.practitioner_id,
+            start=scheduled_start,
+            end=scheduled_end,
+            resource_id=payload.resource_uuid,
+            ignore_appointment_id=appointment.id,
+        )
+    except ValueError as exc:
+        raise _availability_http_error(exc, prefix="The new slot is unavailable: ") from None
+    appointment.scheduled_start, appointment.scheduled_end, appointment.resource_id = scheduled_start, scheduled_end, resource_id
     try:
         await db.commit()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
-            status_code=409, detail="The new appointment slot is no longer available."
+            status_code=409, detail={"code": "SLOT_UNAVAILABLE", "message": "The new appointment slot or required room/resource is no longer available."}
         ) from None
     return {"success": True, "data": appointment_view(appointment), "meta": {}}
 

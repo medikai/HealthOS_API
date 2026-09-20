@@ -11,6 +11,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from zlib import crc32
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -43,6 +44,11 @@ COMMON_VARIABLES = [
     {"key": "vital_uuid", "value": "55eebc99-9c0b-4ef8-bb6d-6bb9bd380a01", "type": "string", "description": "Vitals entry UUID"},
     {"key": "period_id", "value": "44eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa", "type": "string", "description": "Facility Protected Period UUID"},
     {"key": "exception_uuid", "value": "33eebc99-9c0b-4ef8-bb6d-6bb9bd380a99", "type": "string", "description": "Availability Exception UUID"},
+    {"key": "resource_uuid", "value": "66eebc99-9c0b-4ef8-bb6d-6bb9bd380a02", "type": "string", "description": "Facility room/resource UUID"},
+    {"key": "specialty_uuid", "value": "01955b20-1111-7000-8000-000000000001", "type": "string", "description": "Master Specialty UUID"},
+    {"key": "specialty_id", "value": "01955b20-1111-7000-8000-000000000001", "type": "string", "description": "Master Specialty UUID"},
+    {"key": "sub_specialty_id", "value": "01955b20-2222-7000-8000-000000000001", "type": "string", "description": "Master Sub-Specialty UUID"},
+    {"key": "designation_id", "value": "01955b20-3333-7000-8000-000000000001", "type": "string", "description": "Master Staff Designation UUID"},
 ]
 
 # Domain categorization rules
@@ -56,9 +62,9 @@ DOMAIN_RULES = [
     ("07. Queue & Walk-ins", lambda p, m: "/queue" in p or "/walk-ins" in p),
     ("08. Encounters & Clinical Notes (SOAP)", lambda p, m: ("/encounters" in p and "/settings" not in p) or "/prescriptions" in p),
     ("09. Clinical Documentation Settings", lambda p, m: "/clinical" in p),
-    ("10. Dashboard & Analytics", lambda p, m: "/dashboard" in p or "/stats" in p or "/masters" in p),
+    ("10. Dashboard, Analytics & Masters", lambda p, m: "/dashboard" in p or "/stats" in p or "/masters" in p),
     ("11. Staff Administration & Invitations", lambda p, m: "/staff" in p or "/admin/staff" in p),
-    ("12. Facility Scheduling & Protected Periods", lambda p, m: "/facilities/" in p and ("schedule" in p or "protected-periods" in p)),
+    ("12. Facility Scheduling & Protected Periods", lambda p, m: "/facilities/" in p and ("schedule" in p or "protected-periods" in p or "resources" in p)),
     ("13. Events & Audit Logs", lambda p, m: "/events" in p or "/admin/audit-logs" in p),
     ("14. Frontend Compatibility", lambda p, m: "frontend-compat" in p or "availability" in p or p.startswith("/api/v1/api/")),
 ]
@@ -76,15 +82,15 @@ DB_SCHEMA_MAP = {
     "03. Organizations & Multi-Tenancy": "`organization.organization`, `organization.facility`, `organization.department`",
     "04. Bootstrap & Context": "`identity`, `organization`, `platform`",
     "05. Patients": "`identity.patient`, `identity.person`, `care.encounter`",
-    "06. Scheduling & Appointments": "`care.appointment`, `care.availability_rule`, `organization.practitioner`",
+    "06. Scheduling & Appointments": "`care.appointment`, `care.practitioner_availability_rule`, `care.appointment_booking_exception`, `identity.practitioner`, `platform.specialty`, `platform.sub_specialty`, `platform.staff_designation`",
     "07. Queue & Walk-ins": "`care.queue_entry`, `care.appointment`, `identity.patient`",
     "08. Encounters & Clinical Notes (SOAP)": "`care.encounter`, `care.clinical_note`, `care.diagnosis`, `care.vital`, `care.prescription`",
     "09. Clinical Documentation Settings": "`care.clinical_documentation_setting`",
-    "10. Dashboard & Analytics": "`care`, `organization`, `identity` (Read aggregations)",
+    "10. Dashboard, Analytics & Masters": "`care`, `organization`, `identity` (Read aggregations), `platform.specialty`, `platform.sub_specialty`, `platform.staff_designation`",
     "11. Staff Administration & Invitations": "`organization.staff_member`, `organization.staff_assignment`, `organization.invitation`, `identity.user_account`",
-    "12. Facility Scheduling & Protected Periods": "`care.facility_schedule`, `care.protected_period`",
+    "12. Facility Scheduling & Protected Periods": "`organization.facility_schedule`, `organization.protected_period`, `organization.facility_resource`",
     "13. Events & Audit Logs": "`governance.audit_log`, In-Memory / Redis Event Bus",
-    "14. Frontend Compatibility": "`care.appointment`, `care.availability_rule`",
+    "14. Frontend Compatibility": "`care.appointment`, `care.practitioner_availability_rule`",
 }
 
 # Rich, realistic request payloads
@@ -140,13 +146,29 @@ EXAMPLE_REQUEST_BODIES = {
         "address": "789 Mission St, Bangalore"
     },
     ("POST", "/api/v1/appointments"): {
-        "patient_id": "{{patient_uuid}}",
-        "practitioner_id": "{{practitioner_uuid}}",
-        "facility_id": "{{facility_uuid}}",
-        "start_time": "2026-09-20T10:00:00Z",
-        "end_time": "2026-09-20T10:30:00Z",
-        "visit_reason": "General Consultation & Health Check",
-        "appointment_type": "IN_PERSON"
+        "facility_uuid": "{{facility_uuid}}",
+        "practitioner_uuid": "{{practitioner_uuid}}",
+        "patient_uuid": "{{patient_uuid}}",
+        "resource_uuid": "{{resource_uuid}}",
+        "scheduled_start": "2026-09-21T10:00:00+05:30",
+        "scheduled_end": "2026-09-21T10:30:00+05:30",
+        "reason_code": "GENERAL_CONSULTATION",
+        "reason_text": "General consultation and health check",
+        "idempotency_key": "appointment-demo-20260921-1000"
+    },
+    ("POST", "/api/v1/appointments/exception-bookings"): {
+        "facility_uuid": "{{facility_uuid}}",
+        "practitioner_uuid": "{{practitioner_uuid}}",
+        "patient_uuid": "{{patient_uuid}}",
+        "resource_uuid": "{{resource_uuid}}",
+        "scheduled_start": "2026-09-27T10:00:00+05:30",
+        "scheduled_end": "2026-09-27T10:30:00+05:30",
+        "override_types": ["facility_closed", "practitioner_off_hours"],
+        "reason": "Urgent follow-up approved by the doctor",
+        "doctor_agreement_recorded": True,
+        "reason_code": "URGENT_FOLLOW_UP",
+        "reason_text": "One-off Sunday consultation",
+        "idempotency_key": "exception-demo-20260927-1000"
     },
     ("POST", "/api/v1/appointments/{appointment_uuid}/cancel"): {
         "reason": "Patient requested reschedule due to conflict"
@@ -156,9 +178,9 @@ EXAMPLE_REQUEST_BODIES = {
         "notes": "Patient did not answer confirmation call and failed to arrive"
     },
     ("POST", "/api/v1/appointments/{appointment_uuid}/reschedule"): {
-        "new_start_time": "2026-09-21T11:00:00Z",
-        "new_end_time": "2026-09-21T11:30:00Z",
-        "reason": "Doctor schedule emergency shift"
+        "scheduled_start": "2026-09-22T11:00:00+05:30",
+        "scheduled_end": "2026-09-22T11:30:00+05:30",
+        "resource_uuid": "{{resource_uuid}}"
     },
     ("POST", "/api/v1/appointments/{appointment_uuid}/start-consultation"): {},
     ("POST", "/api/v1/walk-ins"): {
@@ -355,7 +377,11 @@ EXAMPLE_REQUEST_BODIES = {
         "full_name": "Dr. Sarah Smith",
         "role_code": "practitioner",
         "facility_uuid": "{{facility_uuid}}",
-        "specialty": "Cardiology"
+        "specialty": "Cardiology",
+        "specialty_id": "{{specialty_id}}",
+        "sub_specialty_id": "{{sub_specialty_id}}",
+        "designation_id": "{{designation_id}}",
+        "medical_council_reg_no": "MCI-2014-987654"
     },
     ("POST", "/api/v1/admin/staff/invitations"): {
         "email": "nurse.jane@example.com",
@@ -391,38 +417,87 @@ EXAMPLE_REQUEST_BODIES = {
         "role_keys": ["organization_admin", "doctor"]
     },
     ("POST", "/api/v1/facilities/{facility_uuid}/protected-periods"): {
-        "name": "Clinical Team Huddle & Disinfection Break",
-        "start_time": "2026-09-20T13:00:00Z",
-        "end_time": "2026-09-20T14:00:00Z",
-        "reason": "Mandatory sanitization and shift handover"
+        "title": "Clinical Team Huddle & Disinfection Break",
+        "start_time": "13:00",
+        "end_time": "14:00",
+        "period_type": "protected",
+        "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+        "is_recurring": True
     },
     ("PUT", "/api/v1/facilities/{facility_uuid}/schedule"): {
-        "weekly_schedule": [
-            {"day_of_week": 1, "open_time": "09:00", "close_time": "18:00"},
-            {"day_of_week": 2, "open_time": "09:00", "close_time": "18:00"},
-            {"day_of_week": 3, "open_time": "09:00", "close_time": "18:00"},
-            {"day_of_week": 4, "open_time": "09:00", "close_time": "18:00"},
-            {"day_of_week": 5, "open_time": "09:00", "close_time": "18:00"},
-            {"day_of_week": 6, "open_time": "09:00", "close_time": "14:00"}
-        ],
-        "slot_duration_minutes": 15
+        "operating_start": "08:00",
+        "operating_end": "20:00",
+        "slot_interval_minutes": 30,
+        "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+        "timezone": "Asia/Kolkata"
+    },
+    ("POST", "/api/v1/facilities/{facility_uuid}/resources"): {
+        "name": "OPD Room 3",
+        "resource_type": "room"
     },
     ("POST", "/api/v1/scheduling/availability-exceptions"): {
-        "practitioner_id": "{{practitioner_uuid}}",
-        "facility_id": "{{facility_uuid}}",
-        "date": "2026-09-25",
+        "facility_uuid": "{{facility_uuid}}",
+        "practitioner_uuid": "{{practitioner_uuid}}",
+        "exception_date": "2026-09-25",
         "start_time": "09:00:00",
         "end_time": "13:00:00",
-        "is_available": False,
+        "exception_type": "leave",
         "reason": "Medical conference attendance"
     },
     ("PUT", "/api/v1/scheduling/availability-rules"): {
-        "practitioner_id": "{{practitioner_uuid}}",
-        "facility_id": "{{facility_uuid}}",
-        "day_of_week": 1,
+        "facility_uuid": "{{facility_uuid}}",
+        "practitioner_uuid": "{{practitioner_uuid}}",
+        "weekday": 0,
         "start_time": "09:00:00",
         "end_time": "17:00:00",
-        "slot_duration_minutes": 15
+        "slot_duration_minutes": 30,
+        "valid_from": "2026-09-21",
+        "valid_until": None,
+        "resource_uuid": "{{resource_uuid}}"
+    },
+    ("POST", "/api/v1/masters/specialties"): {
+        "code": "CARDIO",
+        "name": "Cardiology",
+        "description": "Cardiovascular medicine, coronary artery disease, and heart failure",
+        "is_active": True,
+        "display_order": 1
+    },
+    ("POST", "/api/v1/masters/sub-specialties"): {
+        "specialty_id": "{{specialty_id}}",
+        "code": "INTERVENTIONAL_CARDIO",
+        "name": "Interventional Cardiology",
+        "description": "Catheter-based treatment of structural heart diseases and angioplasty",
+        "is_active": True,
+        "display_order": 1
+    },
+    ("POST", "/api/v1/masters/staff-designations"): {
+        "code": "CHIEF_MEDICAL_OFFICER",
+        "name": "Chief Medical Officer",
+        "category": "CLINICAL",
+        "description": "Senior medical director directing clinical practice and governance",
+        "is_active": True,
+        "display_order": 1
+    },
+    ("POST", "/api/v1/practitioners"): {
+        "user_account_id": "01a0b95c-3fed-785a-95e0-48cc8d07f2ef",
+        "specialty_id": "{{specialty_id}}",
+        "sub_specialty_id": "{{sub_specialty_id}}",
+        "designation_id": "{{designation_id}}",
+        "medical_council_reg_no": "MCI-2014-987654",
+        "prescription_authority_status": "ACTIVE",
+        "has_prescription_authority": True,
+        "facility_ids": ["{{facility_uuid}}"],
+        "is_active": True
+    },
+    ("PATCH", "/api/v1/practitioners/{practitioner_uuid}"): {
+        "specialty_id": "{{specialty_id}}",
+        "sub_specialty_id": "{{sub_specialty_id}}",
+        "designation_id": "{{designation_id}}",
+        "medical_council_reg_no": "MCI-2014-987654",
+        "prescription_authority_status": "ACTIVE",
+        "has_prescription_authority": True,
+        "facility_ids": ["{{facility_uuid}}"],
+        "is_active": True
     },
 }
 
@@ -433,6 +508,56 @@ def get_example_request_body(method: str, path: str) -> dict:
         if m == method and p.split("?")[0] == path.split("?")[0]:
             return body
     return {}
+
+
+CURL_EXAMPLE_PATHS = {
+    "/api/v1/appointments",
+    "/api/v1/appointments/exception-bookings",
+    "/api/v1/appointments/{appointment_uuid}/reschedule",
+    "/api/v1/scheduling/availability",
+    "/api/v1/appointments/availability",
+    "/api/v1/api/appointments/availability",
+    "/api/v1/scheduling/next-slots",
+    "/api/v1/scheduling/calendar",
+    "/api/v1/scheduling/availability-exceptions",
+    "/api/v1/scheduling/availability-rules",
+    "/api/v1/facilities/{facility_uuid}/schedule",
+    "/api/v1/facilities/{facility_uuid}/protected-periods",
+    "/api/v1/facilities/{facility_uuid}/resources",
+    "/api/v1/facilities/{facility_uuid}/resources/{resource_uuid}",
+    "/api/v1/masters/specialties",
+    "/api/v1/masters/sub-specialties",
+    "/api/v1/masters/staff-designations",
+    "/api/v1/practitioners",
+}
+
+
+def build_curl_example(method: str, postman_path: list[str], headers: list[dict], query_params: list[dict], body: dict | None) -> str:
+    curl_path = [f"{{{{{segment[1:]}}}}}" if segment.startswith(":") else segment for segment in postman_path]
+    url = "{{base_url}}/" + "/".join(curl_path)
+    enabled_query = [f"{item['key']}={str(item['value']).replace('+', '%2B').lower() if str(item['value']) in {'True', 'False'} else str(item['value']).replace('+', '%2B')}" for item in query_params if not item.get("disabled")]
+    if enabled_query:
+        url += "?" + "&".join(enabled_query)
+    parts = [f"curl --request {method} '{url}'"]
+    parts.extend(f"  --header '{header['key']}: {header['value']}'" for header in headers)
+    if body is not None:
+        raw = json.dumps(body, indent=2).replace("'", "'\"'\"'")
+        parts.append(f"  --data-raw '{raw}'")
+    return " \\\n".join(parts)
+
+
+def get_synthetic_error_examples(method: str, path: str) -> list[tuple[int, str, str]]:
+    if path == "/api/v1/appointments/exception-bookings":
+        return [
+            (403, "EXCEPTION_BOOKING_PERMISSION_REQUIRED", "Exception booking permission is required."),
+            (409, "DOCTOR_UNAVAILABLE", "Practitioner is on leave or otherwise unavailable."),
+            (409, "SLOT_UNAVAILABLE", "The appointment or required room/resource is no longer available."),
+        ]
+    if path == "/api/v1/appointments" and method == "POST":
+        return [(409, "FACILITY_CLOSED", "Facility is closed for the requested interval.")]
+    if path.endswith("/reschedule"):
+        return [(409, "SLOT_UNAVAILABLE", "The new appointment slot or required room/resource is no longer available.")]
+    return []
 
 # Realistic saved responses mapped by endpoint patterns
 def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
@@ -544,38 +669,50 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
                 }
             ]
         }
-    if "/schedule" in path:
-        return 200, {
+    if "/resources" in path:
+        resource = {
+            "uuid": "66eebc99-9c0b-4ef8-bb6d-6bb9bd380a02",
             "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
-            "weekly_schedule": [
-                {"day_of_week": 1, "open_time": "09:00", "close_time": "18:00"},
-                {"day_of_week": 2, "open_time": "09:00", "close_time": "18:00"},
-                {"day_of_week": 3, "open_time": "09:00", "close_time": "18:00"},
-                {"day_of_week": 4, "open_time": "09:00", "close_time": "18:00"},
-                {"day_of_week": 5, "open_time": "09:00", "close_time": "18:00"},
-                {"day_of_week": 6, "open_time": "09:00", "close_time": "14:00"}
-            ],
-            "slot_duration_minutes": 15
+            "name": "OPD Room 3",
+            "resource_type": "room",
+            "is_active": method != "DELETE"
         }
+        return 201 if method == "POST" else 200, {"items": [resource]} if method == "GET" else resource
+    if "/schedule" in path:
+        schedule = {
+            "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+            "operating_start": "08:00",
+            "operating_end": "20:00",
+            "slot_interval_minutes": 30,
+            "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+            "timezone": "Asia/Kolkata",
+            "configured": True
+        }
+        return 200, {"schedule": schedule, "protected_periods": []} if method == "GET" else {"schedule": schedule}
     if "/protected-periods" in path:
         if method == "DELETE":
-            return 200, {"deleted": True, "period_id": "44eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa"}
+            return 200, {}
         return 201 if method == "POST" else 200, {
             "items": [
                 {
-                    "id": "44eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa",
+                    "uuid": "44eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa",
                     "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
-                    "name": "Clinical Team Huddle & Disinfection Break",
-                    "start_time": "2026-09-20T13:00:00Z",
-                    "end_time": "2026-09-20T14:00:00Z",
-                    "reason": "Mandatory sanitization and shift handover"
+                    "title": "Clinical Team Huddle & Disinfection Break",
+                    "start_time": "13:00",
+                    "end_time": "14:00",
+                    "period_type": "protected",
+                    "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+                    "is_recurring": True
                 }
             ] if method == "GET" else {
-                "id": "44eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa",
+                "uuid": "44eebc99-9c0b-4ef8-bb6d-6bb9bd380aaa",
                 "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
-                "name": "Clinical Team Huddle & Disinfection Break",
-                "start_time": "2026-09-20T13:00:00Z",
-                "end_time": "2026-09-20T14:00:00Z"
+                "title": "Clinical Team Huddle & Disinfection Break",
+                "start_time": "13:00",
+                "end_time": "14:00",
+                "period_type": "protected",
+                "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+                "is_recurring": True
             }
         }
 
@@ -626,52 +763,115 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
         }
 
     # Appointments & Scheduling
-    if "availability" in path or "next-slots" in path:
+    if "availability-exceptions" in path:
+        if method == "DELETE":
+            return 200, {}
+        if method == "POST":
+            return 201, {"uuid": "33eebc99-9c0b-4ef8-bb6d-6bb9bd380a99"}
+        return 200, {"items": [{
+            "uuid": "33eebc99-9c0b-4ef8-bb6d-6bb9bd380a99",
+            "practitioner_uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+            "exception_date": "2026-09-25",
+            "start_time": "09:00:00",
+            "end_time": "13:00:00",
+            "exception_type": "leave",
+            "reason": "Medical conference attendance"
+        }]}
+    if "availability-rules" in path:
+        if method == "PUT":
+            return 200, {"uuid": "77eebc99-9c0b-4ef8-bb6d-6bb9bd380a03"}
+        return 200, {"items": [{
+            "uuid": "77eebc99-9c0b-4ef8-bb6d-6bb9bd380a03",
+            "practitioner_uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+            "weekday": 0,
+            "start_time": "09:00:00",
+            "end_time": "17:00:00",
+            "slot_duration_minutes": 30,
+            "valid_from": "2026-09-21",
+            "valid_until": None,
+            "resource_uuid": "66eebc99-9c0b-4ef8-bb6d-6bb9bd380a02"
+        }]}
+    if "next-slots" in path:
         return 200, {
-            "practitioner_id": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
-            "facility_id": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
-            "date": "2026-09-20",
-            "available_slots": [
-                {"start_time": "10:00:00", "end_time": "10:15:00", "is_available": True},
-                {"start_time": "10:15:00", "end_time": "10:30:00", "is_available": True},
-                {"start_time": "10:30:00", "end_time": "10:45:00", "is_available": False},
-                {"start_time": "11:00:00", "end_time": "11:15:00", "is_available": True}
+            "slots": [
+                "2026-09-21T09:00:00+05:30",
+                "2026-09-21T09:30:00+05:30",
+                "2026-09-21T10:30:00+05:30"
+            ],
+            "availability": [
+                {"date": "2026-09-20", "status": "FACILITY_CLOSED", "reason": "Facility is closed on this date."},
+                {"date": "2026-09-21", "status": "AVAILABLE", "reason": None}
             ]
+        }
+    if "availability" in path:
+        return 200, {
+            "facilityId": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+            "facilityUuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+            "practitionerId": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+            "practitionerUuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+            "date": "2026-09-20",
+            "timezone": "Asia/Kolkata",
+            "durationMinutes": 30,
+            "operatingHours": {"start": "08:00", "end": "20:00"},
+            "availabilityStatus": "FACILITY_CLOSED",
+            "availabilityReason": "Facility is closed on this date.",
+            "nextAvailableSlot": None,
+            "slots": []
         }
     if "calendar" in path:
         return 200, {
-            "date_range": {"from": "2026-09-20", "to": "2026-09-26"},
-            "events": [
+            "facility_uuids": ["01a0b95d-d330-7887-8462-7dc6a0190fb8"],
+            "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+            "timezone": "Asia/Kolkata",
+            "facility_schedule": {
+                "operating_start": "08:00", "operating_end": "20:00", "slot_interval_minutes": 30,
+                "days_of_week": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+                "timezone": "Asia/Kolkata"
+            },
+            "protected_periods": [],
+            "availability": [
+                {"date": "2026-09-20", "practitioner_uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44", "status": "FACILITY_CLOSED", "reason": "Facility is closed on this date.", "usable_slots": []}
+            ],
+            "from": "2026-09-20T00:00:00+05:30",
+            "to": "2026-09-21T00:00:00+05:30",
+            "items": [
                 {
-                    "appointment_uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
-                    "patient_name": "Robert Chen",
-                    "practitioner_name": "Dr. Nitin Shukla",
-                    "start_time": "2026-09-20T10:00:00Z",
-                    "end_time": "2026-09-20T10:30:00Z",
-                    "status": "CONFIRMED"
+                    "uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+                    "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                    "patient_uuid": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+                    "practitioner_uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+                    "resource_uuid": None,
+                    "patient": {"uuid": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22", "display_name": "Robert Chen", "name": "Robert Chen", "medical_record_number": "MRN-2026-0042", "mrn": "MRN-2026-0042", "date_of_birth": "1988-04-12", "gender": "male", "phone": "+919876543210"},
+                    "practitioner": {"uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44", "name": "Dr. Nitin Shukla", "specialty": "General Practice"},
+                    "scheduled_start": "2026-09-20T04:30:00+00:00",
+                    "scheduled_end": "2026-09-20T05:00:00+00:00",
+                    "status": "confirmed",
+                    "reason_code": "LEGACY_BOOKING",
+                    "reason_text": "Existing Sunday appointment retained for visibility",
+                    "event_type": "appointment",
+                    "title": "Robert Chen - booked",
+                    "start": "2026-09-20T10:00:00+05:30",
+                    "end": "2026-09-20T10:30:00+05:30"
                 }
             ]
         }
-    if "availability-exceptions" in path:
-        if method == "DELETE":
-            return 200, {"deleted": True, "exception_uuid": "33eebc99-9c0b-4ef8-bb6d-6bb9bd380a99"}
-        return 201 if method == "POST" else 200, {
-            "uuid": "33eebc99-9c0b-4ef8-bb6d-6bb9bd380a99",
-            "date": "2026-09-25",
-            "start_time": "09:00:00",
-            "end_time": "13:00:00",
-            "is_available": False,
-            "reason": "Medical conference attendance"
-        }
-    if "availability-rules" in path:
-        return 200, {
-            "practitioner_id": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
-            "day_of_week": 1,
-            "start_time": "09:00:00",
-            "end_time": "17:00:00",
-            "slot_duration_minutes": 15
-        }
     if path.startswith("/api/v1/appointments"):
+        if path == "/api/v1/appointments/exception-bookings":
+            return 201, {
+                "uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a34",
+                "status": "booked",
+                "scheduled_start": "2026-09-27T04:30:00+00:00",
+                "scheduled_end": "2026-09-27T05:00:00+00:00",
+                "resource_uuid": "66eebc99-9c0b-4ef8-bb6d-6bb9bd380a02",
+                "exception": {
+                    "uuid": "88eebc99-9c0b-4ef8-bb6d-6bb9bd380a04",
+                    "override_types": ["facility_closed", "practitioner_off_hours"],
+                    "reason": "Urgent follow-up approved by the doctor",
+                    "doctor_agreement_recorded": True,
+                    "actor_user_uuid": "01a0b95c-3fed-785a-95e0-48cc8d07f2ef",
+                    "recorded_at": "2026-09-20T10:30:00+00:00"
+                }
+            }
         if "/check-in" in path:
             return 200, {
                 "uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
@@ -682,7 +882,18 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
         if "/cancel" in path:
             return 200, {"uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33", "status": "CANCELLED"}
         if "/reschedule" in path:
-            return 200, {"uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33", "status": "CONFIRMED", "start_time": "2026-09-21T11:00:00Z"}
+            return 200, {
+                "uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
+                "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                "patient_uuid": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+                "practitioner_uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+                "resource_uuid": "66eebc99-9c0b-4ef8-bb6d-6bb9bd380a02",
+                "scheduled_start": "2026-09-22T05:30:00+00:00",
+                "scheduled_end": "2026-09-22T06:00:00+00:00",
+                "status": "booked",
+                "reason_code": "GENERAL_CONSULTATION",
+                "reason_text": "General consultation and health check"
+            }
         if "/no-show" in path:
             return 200, {"uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33", "status": "NO_SHOW"}
         if "/start-consultation" in path:
@@ -696,28 +907,26 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
                 "items": [
                     {
                         "uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
-                        "patient_id": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
-                        "patient_name": "Robert Chen",
-                        "practitioner_id": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
-                        "practitioner_name": "Dr. Nitin Shukla",
-                        "start_time": "2026-09-20T10:00:00Z",
-                        "end_time": "2026-09-20T10:30:00Z",
-                        "status": "CONFIRMED",
-                        "visit_reason": "General Consultation & Health Check"
+                        "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                        "patient_uuid": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
+                        "practitioner_uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+                        "resource_uuid": "66eebc99-9c0b-4ef8-bb6d-6bb9bd380a02",
+                        "patient": {"uuid": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22", "display_name": "Robert Chen", "name": "Robert Chen", "medical_record_number": "MRN-2026-0042", "mrn": "MRN-2026-0042", "date_of_birth": "1988-04-12", "gender": "male", "phone": "+919876543210"},
+                        "practitioner": {"uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44", "name": "Dr. Nitin Shukla", "specialty": "General Practice"},
+                        "scheduled_start": "2026-09-21T04:30:00+00:00",
+                        "scheduled_end": "2026-09-21T05:00:00+00:00",
+                        "status": "booked",
+                        "reason_code": "GENERAL_CONSULTATION",
+                        "reason_text": "General consultation and health check"
                     }
-                ],
-                "total": 1
+                ]
             }
         return 201 if method == "POST" else 200, {
             "uuid": "c2eebc99-9c0b-4ef8-bb6d-6bb9bd380a33",
-            "patient_id": "b1eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
-            "practitioner_id": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
-            "facility_id": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
-            "start_time": "2026-09-20T10:00:00Z",
-            "end_time": "2026-09-20T10:30:00Z",
-            "status": "CONFIRMED",
-            "appointment_type": "IN_PERSON",
-            "visit_reason": "General Consultation & Health Check"
+            "status": "booked",
+            "scheduled_start": "2026-09-21T04:30:00+00:00",
+            "scheduled_end": "2026-09-21T05:00:00+00:00",
+            "resource_uuid": "66eebc99-9c0b-4ef8-bb6d-6bb9bd380a02"
         }
 
     # Queue & Walk-ins
@@ -909,6 +1118,10 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
             "organization_id": "01a0b95c-3fed-785a-95e0-48cc8d07f2ee",
             "facility_name": "Apex Main Hospital",
             "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+            "specialty_id": "01955b20-1111-7000-8000-000000000001",
+            "sub_specialty_id": "01955b20-2222-7000-8000-000000000001",
+            "designation_id": "01955b20-3333-7000-8000-000000000001",
+            "medical_council_reg_no": "MCI-2014-987654",
             "expires_at": "2026-09-27T10:00:00Z"
         }
     if "invitations/accept" in path:
@@ -930,6 +1143,11 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
                 "full_name": "Dr. Sarah Smith",
                 "role_code": "practitioner",
                 "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                "specialty": "Cardiology",
+                "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                "sub_specialty_id": "01955b20-2222-7000-8000-000000000001",
+                "designation_id": "01955b20-3333-7000-8000-000000000001",
+                "medical_council_reg_no": "MCI-2014-987654",
                 "token": "dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu",
                 "expires_at": "2026-09-27T10:00:00Z",
                 "status": "pending",
@@ -943,6 +1161,11 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
                     "full_name": "Dr. Sarah Smith",
                     "role_code": "practitioner",
                     "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                    "specialty": "Cardiology",
+                    "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                    "sub_specialty_id": "01955b20-2222-7000-8000-000000000001",
+                    "designation_id": "01955b20-3333-7000-8000-000000000001",
+                    "medical_council_reg_no": "MCI-2014-987654",
                     "status": "pending",
                     "token": "dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu",
                     "expires_at": "2026-09-27T10:00:00Z",
@@ -1012,15 +1235,216 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
     # Masters
     if "/masters/" in path:
         if "specialties" in path:
+            if method == "POST":
+                return 201, {
+                    "uuid": "01955b20-1111-7000-8000-000000000001",
+                    "code": "CARDIO",
+                    "name": "Cardiology",
+                    "description": "Cardiovascular medicine, coronary artery disease, and heart failure",
+                    "is_active": True,
+                    "display_order": 1,
+                    "created_at": "2026-09-20T10:00:00Z",
+                    "updated_at": "2026-09-20T10:00:00Z"
+                }
+            if path.rstrip("/").endswith("specialties"):
+                return 200, {
+                    "items": [
+                        {
+                            "uuid": "01955b20-1111-7000-8000-000000000001",
+                            "code": "CARDIO",
+                            "name": "Cardiology",
+                            "description": "Cardiovascular medicine, coronary artery disease, heart failure",
+                            "is_active": True,
+                            "display_order": 1,
+                            "sub_specialty_count": 4
+                        },
+                        {
+                            "uuid": "01955b20-1111-7000-8000-000000000002",
+                            "code": "GENERAL_PRACTICE",
+                            "name": "General Practice / Internal Medicine",
+                            "description": "Primary healthcare, preventive medicine, comprehensive adult medical care",
+                            "is_active": True,
+                            "display_order": 2,
+                            "sub_specialty_count": 3
+                        },
+                        {
+                            "uuid": "01955b20-1111-7000-8000-000000000003",
+                            "code": "DERMATOLOGY",
+                            "name": "Dermatology",
+                            "description": "Skin, hair, and nail health, dermatological surgical procedures",
+                            "is_active": True,
+                            "display_order": 3,
+                            "sub_specialty_count": 2
+                        },
+                        {
+                            "uuid": "01955b20-1111-7000-8000-000000000004",
+                            "code": "PEDIATRICS",
+                            "name": "Pediatrics & Child Health",
+                            "description": "Infant, child, and adolescent medical care and vaccinations",
+                            "is_active": True,
+                            "display_order": 4,
+                            "sub_specialty_count": 2
+                        },
+                        {
+                            "uuid": "01955b20-1111-7000-8000-000000000005",
+                            "code": "ORTHOPEDICS",
+                            "name": "Orthopedics & Sports Medicine",
+                            "description": "Musculoskeletal system, bone fractures, joint replacements",
+                            "is_active": True,
+                            "display_order": 5,
+                            "sub_specialty_count": 3
+                        }
+                    ],
+                    "total": 5
+                }
+            # Single specialty
             return 200, {
-                "items": [
-                    {"code": "GENERAL_PRACTICE", "name": "General Practice"},
-                    {"code": "CARDIOLOGY", "name": "Cardiology"},
-                    {"code": "PEDIATRICS", "name": "Pediatrics"},
-                    {"code": "DERMATOLOGY", "name": "Dermatology"},
-                    {"code": "ORTHOPEDICS", "name": "Orthopedics"}
+                "uuid": "01955b20-1111-7000-8000-000000000001",
+                "code": "CARDIO",
+                "name": "Cardiology",
+                "description": "Cardiovascular medicine and heart health",
+                "is_active": True,
+                "display_order": 1,
+                "created_at": "2026-09-20T10:00:00Z",
+                "updated_at": "2026-09-20T10:00:00Z",
+                "sub_specialties": [
+                    {
+                        "uuid": "01955b20-2222-7000-8000-000000000001",
+                        "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                        "specialty_code": "CARDIO",
+                        "code": "INTERVENTIONAL_CARDIO",
+                        "name": "Interventional Cardiology",
+                        "description": "Catheter-based treatment of structural heart diseases and angioplasty",
+                        "is_active": True,
+                        "display_order": 1
+                    },
+                    {
+                        "uuid": "01955b20-2222-7000-8000-000000000002",
+                        "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                        "specialty_code": "CARDIO",
+                        "code": "ELECTROPHYSIOLOGY",
+                        "name": "Cardiac Electrophysiology",
+                        "description": "Heart rhythm disorders, pacemaker implantation, and arrhythmias",
+                        "is_active": True,
+                        "display_order": 2
+                    }
                 ]
             }
+
+        if "sub-specialties" in path:
+            if method == "POST":
+                return 201, {
+                    "uuid": "01955b20-2222-7000-8000-000000000001",
+                    "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                    "specialty_code": "CARDIO",
+                    "code": "INTERVENTIONAL_CARDIO",
+                    "name": "Interventional Cardiology",
+                    "description": "Catheter-based treatment of structural heart diseases and angioplasty",
+                    "is_active": True,
+                    "display_order": 1,
+                    "created_at": "2026-09-20T10:00:00Z",
+                    "updated_at": "2026-09-20T10:00:00Z"
+                }
+            return 200, {
+                "items": [
+                    {
+                        "uuid": "01955b20-2222-7000-8000-000000000001",
+                        "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                        "specialty_code": "CARDIO",
+                        "code": "INTERVENTIONAL_CARDIO",
+                        "name": "Interventional Cardiology",
+                        "description": "Catheter-based treatment of structural heart diseases and angioplasty",
+                        "is_active": True,
+                        "display_order": 1
+                    },
+                    {
+                        "uuid": "01955b20-2222-7000-8000-000000000002",
+                        "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                        "specialty_code": "CARDIO",
+                        "code": "ELECTROPHYSIOLOGY",
+                        "name": "Cardiac Electrophysiology",
+                        "description": "Heart rhythm disorders, pacemaker implantation, and arrhythmias",
+                        "is_active": True,
+                        "display_order": 2
+                    },
+                    {
+                        "uuid": "01955b20-2222-7000-8000-000000000003",
+                        "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                        "specialty_code": "CARDIO",
+                        "code": "HEART_FAILURE",
+                        "name": "Advanced Heart Failure & Transplant",
+                        "description": "Comprehensive management of refractory cardiac failure",
+                        "is_active": True,
+                        "display_order": 3
+                    }
+                ],
+                "total": 3
+            }
+
+        if "staff-designations" in path:
+            if method == "POST":
+                return 201, {
+                    "uuid": "01955b20-3333-7000-8000-000000000001",
+                    "code": "CHIEF_MEDICAL_OFFICER",
+                    "name": "Chief Medical Officer",
+                    "category": "CLINICAL",
+                    "description": "Senior physician executive directing clinical operations",
+                    "is_active": True,
+                    "display_order": 1,
+                    "created_at": "2026-09-20T10:00:00Z",
+                    "updated_at": "2026-09-20T10:00:00Z"
+                }
+            return 200, {
+                "items": [
+                    {
+                        "uuid": "01955b20-3333-7000-8000-000000000001",
+                        "code": "CHIEF_MEDICAL_OFFICER",
+                        "name": "Chief Medical Officer",
+                        "category": "CLINICAL",
+                        "description": "Senior physician executive directing clinical operations",
+                        "is_active": True,
+                        "display_order": 1
+                    },
+                    {
+                        "uuid": "01955b20-3333-7000-8000-000000000002",
+                        "code": "SENIOR_CONSULTANT",
+                        "name": "Senior Consultant",
+                        "category": "CLINICAL",
+                        "description": "Senior attending specialist physician",
+                        "is_active": True,
+                        "display_order": 2
+                    },
+                    {
+                        "uuid": "01955b20-3333-7000-8000-000000000003",
+                        "code": "ASSOCIATE_CONSULTANT",
+                        "name": "Associate Consultant",
+                        "category": "CLINICAL",
+                        "description": "Specialist physician working under senior oversight",
+                        "is_active": True,
+                        "display_order": 3
+                    },
+                    {
+                        "uuid": "01955b20-3333-7000-8000-000000000004",
+                        "code": "RESIDENT_PHYSICIAN",
+                        "name": "Resident Physician",
+                        "category": "CLINICAL",
+                        "description": "In-training postgraduate physician",
+                        "is_active": True,
+                        "display_order": 4
+                    },
+                    {
+                        "uuid": "01955b20-3333-7000-8000-000000000005",
+                        "code": "HEAD_NURSE",
+                        "name": "Head Nurse / Nursing Supervisor",
+                        "category": "NURSING",
+                        "description": "Chief supervisor of nursing care and ward clinical workflow",
+                        "is_active": True,
+                        "display_order": 5
+                    }
+                ],
+                "total": 5
+            }
+
         if "access-roles" in path:
             return 200, {
                 "items": [
@@ -1031,16 +1455,7 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
                     {"code": "billing_operator", "name": "Billing Operator"}
                 ]
             }
-        if "staff-designations" in path:
-            return 200, {
-                "items": [
-                    {"code": "CHIEF_MEDICAL_OFFICER", "name": "Chief Medical Officer"},
-                    {"code": "SENIOR_CONSULTANT", "name": "Senior Consultant"},
-                    {"code": "RESIDENT_PHYSICIAN", "name": "Resident Physician"},
-                    {"code": "HEAD_NURSE", "name": "Head Nurse"},
-                    {"code": "CLINICAL_COORDINATOR", "name": "Clinical Coordinator"}
-                ]
-            }
+
         if "visit-reasons" in path:
             return 200, {
                 "items": [
@@ -1054,17 +1469,35 @@ def get_realistic_success_data(method: str, path: str) -> tuple[int, dict]:
 
     # Practitioners
     if path.startswith("/api/v1/practitioners"):
-        return 200, {
-            "items": [
-                {
-                    "uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
-                    "name": "Dr. Nitin Shukla",
-                    "specialty": "General Practice",
-                    "facility_ids": ["01a0b95d-d330-7887-8462-7dc6a0190fb8"],
-                    "is_active": True
-                }
-            ]
+        practitioner_data = {
+            "uuid": "d3eebc99-9c0b-4ef8-bb6d-6bb9bd380a44",
+            "user_account_id": "01a0b95c-3fed-785a-95e0-48cc8d07f2ef",
+            "name": "Dr. Nitin Shukla",
+            "specialty": "Cardiology",
+            "specialty_id": "01955b20-1111-7000-8000-000000000001",
+            "specialty_code": "CARDIO",
+            "specialty_name": "Cardiology",
+            "sub_specialty_id": "01955b20-2222-7000-8000-000000000001",
+            "sub_specialty_code": "INTERVENTIONAL_CARDIO",
+            "sub_specialty_name": "Interventional Cardiology",
+            "designation_id": "01955b20-3333-7000-8000-000000000001",
+            "designation_code": "CHIEF_MEDICAL_OFFICER",
+            "designation_name": "Chief Medical Officer",
+            "medical_council_reg_no": "MCI-2014-987654",
+            "prescription_authority_status": "ACTIVE",
+            "has_prescription_authority": True,
+            "facility_ids": ["01a0b95d-d330-7887-8462-7dc6a0190fb8"],
+            "is_active": True
         }
+        if method == "POST":
+            return 201, practitioner_data
+        if method == "PATCH":
+            return 200, practitioner_data
+        if path.rstrip("/").endswith("practitioners"):
+            return 200, {
+                "items": [practitioner_data]
+            }
+        return 200, practitioner_data
 
     # Events
     if "/events/stream" in path:
@@ -1084,7 +1517,7 @@ def build_postman_collection(openapi_spec):
         "info": {
             "_postman_id": "healthos-api-all-endpoints-2026",
             "name": "HealthOS API - Complete Collection",
-            "description": "Comprehensive, production-ready Postman collection for all 78 HealthOS endpoints across identity, organization, scheduling, care/encounters/SOAP, governance, and administration. Every endpoint includes realistic request bodies and saved 200/201 Success and 400/404 Error responses.",
+            "description": "Comprehensive Postman collection for HealthOS identity, organization, scheduling, care/encounters/SOAP, governance, and administration APIs. Endpoints include realistic request bodies and saved synthetic success/error responses for example use.",
             "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
         },
         "variable": COMMON_VARIABLES,
@@ -1105,6 +1538,7 @@ def build_postman_collection(openapi_spec):
                 continue
             
             method = method_lower.upper()
+            request_suffix = crc32(f"{method}:{path}".encode()) % 100000
             summary = op_data.get("summary") or op_data.get("operationId") or f"{method} {path}"
             description = op_data.get("description") or summary
             
@@ -1151,6 +1585,10 @@ def build_postman_collection(openapi_spec):
                             default_val = "2026-09-20"
                         elif "practitioner" in param_name:
                             default_val = "{{practitioner_uuid}}"
+                        elif param_name == "from":
+                            default_val = "2026-09-20T00:00:00+05:30"
+                        elif param_name == "to":
+                            default_val = "2026-09-21T00:00:00+05:30"
                         elif "token" in param_name:
                             default_val = "{{invitation_token}}"
                     query_params.append({
@@ -1169,6 +1607,10 @@ def build_postman_collection(openapi_spec):
                     "raw": json.dumps(sample_body, indent=2),
                     "options": {"raw": {"language": "json"}}
                 }
+
+            if path in CURL_EXAMPLE_PATHS:
+                curl = build_curl_example(method, postman_path, headers, query_params, sample_body if method in ["POST", "PUT", "PATCH"] else None)
+                description += f"\n\n### Example cURL\n```bash\n{curl}\n```"
 
             # Realistic Saved Responses
             success_status_code, success_data = get_realistic_success_data(method, path)
@@ -1194,7 +1636,7 @@ def build_postman_collection(openapi_spec):
                         "success": True,
                         "data": success_data,
                         "meta": {
-                            "request_id": f"req-success-{abs(hash(path + method)) % 100000:05d}"
+                            "request_id": f"req-success-{request_suffix:05d}"
                         }
                     }, indent=2)
                 },
@@ -1227,11 +1669,39 @@ def build_postman_collection(openapi_spec):
                             ]
                         },
                         "meta": {
-                            "request_id": f"req-err-{abs(hash(path + method)) % 100000:05d}"
+                            "request_id": f"req-err-{request_suffix:05d}"
                         }
                     }, indent=2)
                 }
             ]
+
+            for error_status, error_code, error_message in get_synthetic_error_examples(method, path):
+                error_status_text = {403: "Forbidden", 409: "Conflict"}[error_status]
+                saved_responses.append({
+                    "name": f"{error_code} ({error_status} {error_status_text})",
+                    "originalRequest": {
+                        "method": method,
+                        "header": headers,
+                        "url": {
+                            "raw": "{{base_url}}/" + "/".join(postman_path),
+                            "host": ["{{base_url}}"],
+                            "path": postman_path
+                        }
+                    },
+                    "status": error_status_text,
+                    "code": error_status,
+                    "_postman_previewlanguage": "json",
+                    "header": [{"key": "Content-Type", "value": "application/json"}],
+                    "body": json.dumps({
+                        "success": False,
+                        "error": {
+                            "code": error_code,
+                            "message": error_message,
+                            "details": [{"availability_status": error_code}] if error_status == 409 else []
+                        },
+                        "meta": {"request_id": f"req-{error_code.lower()}-example"}
+                    }, indent=2)
+                })
 
             # Add 401 Unauthorized for protected endpoints
             if "/auth/login" not in path and "/auth/register" not in path and "invitations/validate" not in path and "invitations/accept" not in path and path not in ["/api/v1/health", "/api/v1/ready"]:
@@ -1258,7 +1728,7 @@ def build_postman_collection(openapi_spec):
                             "details": []
                         },
                         "meta": {
-                            "request_id": f"req-unauth-{abs(hash(path + method)) % 100000:05d}"
+                            "request_id": f"req-unauth-{request_suffix:05d}"
                         }
                     }, indent=2)
                 })
@@ -1315,6 +1785,9 @@ def build_staff_invitation_flow_collection():
             {"key": "invitation_token", "value": "dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu", "type": "string", "description": "Invitation token dynamically extracted from Step 1"},
             {"key": "staff_access_token", "value": "sample-staff-access-token-step4", "type": "string", "description": "Access token dynamically extracted from Step 4"},
             {"key": "new_staff_uuid", "value": "f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66", "type": "string", "description": "New staff UUID from Step 4"},
+            {"key": "specialty_id", "value": "01955b20-1111-7000-8000-000000000001", "type": "string", "description": "Master Clinical Specialty UUID"},
+            {"key": "sub_specialty_id", "value": "01955b20-2222-7000-8000-000000000001", "type": "string", "description": "Master Clinical Sub-Specialty UUID"},
+            {"key": "designation_id", "value": "01955b20-3333-7000-8000-000000000001", "type": "string", "description": "Master Staff Designation UUID"},
         ],
         "item": [
             {
@@ -1360,11 +1833,15 @@ def build_staff_invitation_flow_collection():
                                     "full_name": "Dr. Sarah Smith",
                                     "role_code": "practitioner",
                                     "facility_uuid": "{{facility_uuid}}",
-                                    "specialty": "Cardiology"
+                                    "specialty": "Cardiology",
+                                    "specialty_id": "{{specialty_id}}",
+                                    "sub_specialty_id": "{{sub_specialty_id}}",
+                                    "designation_id": "{{designation_id}}",
+                                    "medical_council_reg_no": "MCI-2014-987654"
                                 }, indent=2),
                                 "options": {"raw": {"language": "json"}}
                             },
-                            "description": "Admin generates a new staff invitation with role assignment and target facility. Generates a secure URL-safe 7-day token and invite link."
+                            "description": "Admin generates a new staff invitation with role assignment, clinical credentials, and target facility. Generates a secure URL-safe 7-day token and invite link."
                         },
                         "response": [
                             {
@@ -1381,6 +1858,11 @@ def build_staff_invitation_flow_collection():
                                         "full_name": "Dr. Sarah Smith",
                                         "role_code": "practitioner",
                                         "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                                        "specialty": "Cardiology",
+                                        "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                                        "sub_specialty_id": "01955b20-2222-7000-8000-000000000001",
+                                        "designation_id": "01955b20-3333-7000-8000-000000000001",
+                                        "medical_council_reg_no": "MCI-2014-987654",
                                         "token": "dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu",
                                         "expires_at": "2026-09-27T10:00:00Z",
                                         "status": "pending",
@@ -1439,6 +1921,11 @@ def build_staff_invitation_flow_collection():
                                                 "full_name": "Dr. Sarah Smith",
                                                 "role_code": "practitioner",
                                                 "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                                                "specialty": "Cardiology",
+                                                "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                                                "sub_specialty_id": "01955b20-2222-7000-8000-000000000001",
+                                                "designation_id": "01955b20-3333-7000-8000-000000000001",
+                                                "medical_council_reg_no": "MCI-2014-987654",
                                                 "status": "pending",
                                                 "token": "dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu",
                                                 "expires_at": "2026-09-27T10:00:00Z",
@@ -1492,6 +1979,10 @@ def build_staff_invitation_flow_collection():
                                         "organization_id": "01a0b95c-3fed-785a-95e0-48cc8d07f2ee",
                                         "facility_name": "Apex Main Hospital",
                                         "facility_uuid": "01a0b95d-d330-7887-8462-7dc6a0190fb8",
+                                        "specialty_id": "01955b20-1111-7000-8000-000000000001",
+                                        "sub_specialty_id": "01955b20-2222-7000-8000-000000000001",
+                                        "designation_id": "01955b20-3333-7000-8000-000000000001",
+                                        "medical_council_reg_no": "MCI-2014-987654",
                                         "expires_at": "2026-09-27T10:00:00Z"
                                     },
                                     "meta": {"request_id": "req-inv-003"}
@@ -1896,7 +2387,7 @@ def build_markdown_docs(openapi_spec):
     md.append("- **Architecture Schemas in Use**: `identity`, `organization`, `platform`, `care`, `governance`")
     md.append("- **Authentication Model**: Logto Backend-For-Frontend (BFF) Authorization-Code flow with secure HTTP-only cookies (`healthos_session`) and `X-CSRF-Token` protection.")
     md.append("- **Postman Collections Available**:")
-    md.append("  1. 📦 [Complete API Collection (78 Endpoints)](HealthOS_All_APIs.postman_collection.json)")
+    md.append(f"  1. 📦 [Complete API Collection ({len(all_endpoints)} Endpoints)](HealthOS_All_APIs.postman_collection.json)")
     md.append("  2. 🔗 [Dedicated Staff Invitation & Onboarding Flow Collection](HealthOS_Staff_Invitation_Flow.postman_collection.json)")
     md.append("")
     md.append("---")

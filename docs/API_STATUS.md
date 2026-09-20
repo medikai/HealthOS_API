@@ -5,12 +5,12 @@
 
 ## 📊 Summary Statistics
 
-- **Total API Endpoints / Operations**: 102
-- **Total Unique API Routes**: 81
+- **Total API Endpoints / Operations**: 113
+- **Total Unique API Routes**: 86
 - **Architecture Schemas in Use**: `identity`, `organization`, `platform`, `care`, `governance`
 - **Authentication Model**: Logto Backend-For-Frontend (BFF) Authorization-Code flow with secure HTTP-only cookies (`healthos_session`) and `X-CSRF-Token` protection.
 - **Postman Collections Available**:
-  1. 📦 [Complete API Collection (78 Endpoints)](HealthOS_All_APIs.postman_collection.json)
+  1. 📦 [Complete API Collection (113 Endpoints)](HealthOS_All_APIs.postman_collection.json)
   2. 🔗 [Dedicated Staff Invitation & Onboarding Flow Collection](HealthOS_Staff_Invitation_Flow.postman_collection.json)
 
 ---
@@ -42,15 +42,15 @@ The invitation and onboarding flow is isolated into a standalone Postman collect
 | **03. Organizations & Multi-Tenancy** | 5 | ✅ Complete | `organization.organization`, `organization.facility`, `organization.department` | BFF Cookie (`healthos_session`) + CSRF |
 | **04. Bootstrap & Context** | 3 | ✅ Complete | `identity`, `organization`, `platform` | BFF Cookie (`healthos_session`) + CSRF |
 | **05. Patients** | 7 | ✅ Complete | `identity.patient`, `identity.person`, `care.encounter` | BFF Cookie (`healthos_session`) + CSRF |
-| **06. Scheduling & Appointments** | 12 | ✅ Complete | `care.appointment`, `care.availability_rule`, `organization.practitioner` | BFF Cookie (`healthos_session`) + CSRF |
+| **06. Scheduling & Appointments** | 15 | ✅ Complete | `care.appointment`, `care.practitioner_availability_rule`, `care.appointment_booking_exception`, `identity.practitioner`, `platform.specialty`, `platform.sub_specialty`, `platform.staff_designation` | BFF Cookie (`healthos_session`) + CSRF |
 | **07. Queue & Walk-ins** | 7 | ✅ Complete | `care.queue_entry`, `care.appointment`, `identity.patient` | BFF Cookie (`healthos_session`) + CSRF |
 | **08. Encounters & Clinical Notes (SOAP)** | 18 | ✅ Complete | `care.encounter`, `care.clinical_note`, `care.diagnosis`, `care.vital`, `care.prescription` | BFF Cookie (`healthos_session`) + CSRF |
 | **09. Clinical Documentation Settings** | 6 | ✅ Complete | `care.clinical_documentation_setting` | BFF Cookie (`healthos_session`) + CSRF |
-| **10. Dashboard & Analytics** | 6 | ✅ Complete | `care`, `organization`, `identity` (Read aggregations) | BFF Cookie (`healthos_session`) + CSRF |
+| **10. Dashboard, Analytics & Masters** | 11 | ✅ Complete | `care`, `organization`, `identity` (Read aggregations), `platform.specialty`, `platform.sub_specialty`, `platform.staff_designation` | BFF Cookie (`healthos_session`) + CSRF |
 | **11. Staff Administration & Invitations** | 17 | ✅ Complete | `organization.staff_member`, `organization.staff_assignment`, `organization.invitation`, `identity.user_account` | BFF Cookie / CSRF |
-| **12. Facility Scheduling & Protected Periods** | 5 | ✅ Complete | `care.facility_schedule`, `care.protected_period` | BFF Cookie (`healthos_session`) + CSRF |
+| **12. Facility Scheduling & Protected Periods** | 8 | ✅ Complete | `organization.facility_schedule`, `organization.protected_period`, `organization.facility_resource` | BFF Cookie (`healthos_session`) + CSRF |
 | **13. Events & Audit Logs** | 2 | ✅ Complete | `governance.audit_log`, In-Memory / Redis Event Bus | BFF Cookie (`healthos_session`) + CSRF |
-| **14. Frontend Compatibility** | 8 | ✅ Complete | `care.appointment`, `care.availability_rule` | BFF Cookie (`healthos_session`) + CSRF |
+| **14. Frontend Compatibility** | 8 | ✅ Complete | `care.appointment`, `care.practitioner_availability_rule` | BFF Cookie (`healthos_session`) + CSRF |
 
 ---
 
@@ -114,12 +114,13 @@ The invitation and onboarding flow is isolated into a standalone Postman collect
 
 ### 06. Scheduling & Appointments
 
-**Database Schema Ownership**: `care.appointment`, `care.availability_rule`, `organization.practitioner`
+**Database Schema Ownership**: `care.appointment`, `care.practitioner_availability_rule`, `care.appointment_booking_exception`, `identity.practitioner`, `platform.specialty`, `platform.sub_specialty`, `platform.staff_designation`
 
 | Method | Endpoint | Description | Auth | Status |
 |:---|:---|:---|:---|:---:|
 | `POST` | `/api/v1/appointments` | Create Appointment | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/appointments` | List Appointments | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `POST` | `/api/v1/appointments/exception-bookings` | Create Exception Booking | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/appointments/{appointment_uuid}` | Get Appointment | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `POST` | `/api/v1/appointments/{appointment_uuid}/cancel` | Cancel Appointment | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `POST` | `/api/v1/appointments/{appointment_uuid}/check-in` | Check In | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
@@ -127,6 +128,8 @@ The invitation and onboarding flow is isolated into a standalone Postman collect
 | `POST` | `/api/v1/appointments/{appointment_uuid}/reschedule` | Reschedule Appointment | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `POST` | `/api/v1/appointments/{appointment_uuid}/start-consultation` | Start Appointment Consultation | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/practitioners` | Practitioners | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `POST` | `/api/v1/practitioners` | Create Practitioner | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `PATCH` | `/api/v1/practitioners/{practitioner_uuid}` | Update Practitioner | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/practitioners/{practitioner_uuid}` | Practitioner Detail | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/scheduling/calendar` | Calendar | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/scheduling/next-slots` | Next Slots | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
@@ -183,16 +186,21 @@ The invitation and onboarding flow is isolated into a standalone Postman collect
 | `PUT` | `/api/v1/clinical/settings` | Update Clinical Documentation Settings | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `POST` | `/api/v1/clinical/settings/reset` | Reset Clinical Documentation Settings | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 
-### 10. Dashboard & Analytics
+### 10. Dashboard, Analytics & Masters
 
-**Database Schema Ownership**: `care`, `organization`, `identity` (Read aggregations)
+**Database Schema Ownership**: `care`, `organization`, `identity` (Read aggregations), `platform.specialty`, `platform.sub_specialty`, `platform.staff_designation`
 
 | Method | Endpoint | Description | Auth | Status |
 |:---|:---|:---|:---|:---:|
 | `GET` | `/api/v1/dashboard/today` | Today Dashboard | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/masters/access-roles` | Access Roles | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
-| `GET` | `/api/v1/masters/specialties` | Specialties | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
-| `GET` | `/api/v1/masters/staff-designations` | Staff Designations | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/masters/specialties` | List Specialties | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `POST` | `/api/v1/masters/specialties` | Create Specialty | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/masters/specialties/{specialty_uuid}` | Get Specialty | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/masters/staff-designations` | List Staff Designations | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `POST` | `/api/v1/masters/staff-designations` | Create Staff Designation | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/masters/sub-specialties` | List Sub Specialties | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `POST` | `/api/v1/masters/sub-specialties` | Create Sub Specialty | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/masters/visit-reasons` | Visit Reasons | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/stats` | Facility Stats | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 
@@ -222,13 +230,16 @@ The invitation and onboarding flow is isolated into a standalone Postman collect
 
 ### 12. Facility Scheduling & Protected Periods
 
-**Database Schema Ownership**: `care.facility_schedule`, `care.protected_period`
+**Database Schema Ownership**: `organization.facility_schedule`, `organization.protected_period`, `organization.facility_resource`
 
 | Method | Endpoint | Description | Auth | Status |
 |:---|:---|:---|:---|:---:|
 | `GET` | `/api/v1/facilities/{facility_uuid}/protected-periods` | List Periods | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `POST` | `/api/v1/facilities/{facility_uuid}/protected-periods` | Create Period | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `DELETE` | `/api/v1/facilities/{facility_uuid}/protected-periods/{period_id}` | Delete Period | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/facilities/{facility_uuid}/resources` | List Resources | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `POST` | `/api/v1/facilities/{facility_uuid}/resources` | Create Resource | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `DELETE` | `/api/v1/facilities/{facility_uuid}/resources/{resource_uuid}` | Deactivate Resource | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/facilities/{facility_uuid}/schedule` | Get Schedule | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `PUT` | `/api/v1/facilities/{facility_uuid}/schedule` | Update Schedule | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 
@@ -243,7 +254,7 @@ The invitation and onboarding flow is isolated into a standalone Postman collect
 
 ### 14. Frontend Compatibility
 
-**Database Schema Ownership**: `care.appointment`, `care.availability_rule`
+**Database Schema Ownership**: `care.appointment`, `care.practitioner_availability_rule`
 
 | Method | Endpoint | Description | Auth | Status |
 |:---|:---|:---|:---|:---:|

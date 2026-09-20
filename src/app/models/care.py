@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -30,9 +31,16 @@ class Practitioner(Base):
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
     person_name: Mapped[str] = mapped_column(String(255))
     specialty: Mapped[str | None] = mapped_column(String(255), default=None)
+    specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.specialty.id"), index=True, default=None)
+    sub_specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.sub_specialty.id"), index=True, default=None)
+    designation_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.staff_designation.id"), index=True, default=None)
+    medical_council_reg_no: Mapped[str | None] = mapped_column(String(100), default=None)
+    prescription_authority_status: Mapped[str] = mapped_column(String(32), default="authorized")
+    has_prescription_authority: Mapped[bool] = mapped_column(Boolean, default=True)
     user_account_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), unique=True, default=None, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+
 
 
 class Appointment(Base):
@@ -50,6 +58,7 @@ class Appointment(Base):
     patient_id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), index=True)
     scheduled_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     scheduled_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    resource_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("organization.facility_resource.id"), default=None, index=True)
     status: Mapped[str] = mapped_column(String(32), default="booked", index=True)
     reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
     reason_text: Mapped[str | None] = mapped_column(Text, default=None)
@@ -70,6 +79,7 @@ class PractitionerAvailabilityRule(Base):
     end_time: Mapped[time] = mapped_column(Time)
     slot_duration_minutes: Mapped[int] = mapped_column(Integer)
     valid_from: Mapped[date] = mapped_column(Date)
+    resource_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("organization.facility_resource.id"), default=None, index=True)
     valid_until: Mapped[date | None] = mapped_column(Date, default=None)
     status: Mapped[str] = mapped_column(String(32), default="active")
 
@@ -87,6 +97,29 @@ class PractitionerAvailabilityException(Base):
     start_time: Mapped[time | None] = mapped_column(Time, default=None)
     end_time: Mapped[time | None] = mapped_column(Time, default=None)
     reason: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+class AppointmentBookingException(Base):
+    __tablename__ = "appointment_booking_exception"
+    __table_args__ = (
+        CheckConstraint("scheduled_end > scheduled_start", name="ck_booking_exception_time_range"),
+        CheckConstraint("doctor_agreement_recorded", name="ck_booking_exception_doctor_agreement"),
+        {"schema": "care"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    appointment_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("care.appointment.id"), unique=True)
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    facility_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.facility.id"), index=True)
+    practitioner_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.practitioner.id"), index=True)
+    patient_id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    scheduled_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    scheduled_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    override_types: Mapped[list[str]] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(Text)
+    doctor_agreement_recorded: Mapped[bool] = mapped_column(Boolean)
+    actor_user_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.user_account.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 
 
 class QueueCounter(Base):

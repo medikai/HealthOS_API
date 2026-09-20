@@ -53,6 +53,24 @@
       "value": "f5eebc99-9c0b-4ef8-bb6d-6bb9bd380a66",
       "type": "string",
       "description": "New staff UUID from Step 4"
+    },
+    {
+      "key": "specialty_id",
+      "value": "01955b20-1111-7000-8000-000000000001",
+      "type": "string",
+      "description": "Master Clinical Specialty UUID"
+    },
+    {
+      "key": "sub_specialty_id",
+      "value": "01955b20-2222-7000-8000-000000000001",
+      "type": "string",
+      "description": "Master Clinical Sub-Specialty UUID"
+    },
+    {
+      "key": "designation_id",
+      "value": "01955b20-3333-7000-8000-000000000001",
+      "type": "string",
+      "description": "Master Staff Designation UUID"
     }
   ],
   "item": [
@@ -117,14 +135,14 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"{{invited_email}}\",\n  \"full_name\": \"Dr. Sarah Smith\",\n  \"role_code\": \"practitioner\",\n  \"facility_uuid\": \"{{facility_uuid}}\",\n  \"specialty\": \"Cardiology\"\n}",
+              "raw": "{\n  \"email\": \"{{invited_email}}\",\n  \"full_name\": \"Dr. Sarah Smith\",\n  \"role_code\": \"practitioner\",\n  \"facility_uuid\": \"{{facility_uuid}}\",\n  \"specialty\": \"Cardiology\",\n  \"specialty_id\": \"{{specialty_id}}\",\n  \"sub_specialty_id\": \"{{sub_specialty_id}}\",\n  \"designation_id\": \"{{designation_id}}\",\n  \"medical_council_reg_no\": \"MCI-2014-987654\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
                 }
               }
             },
-            "description": "Admin generates a new staff invitation with role assignment and target facility. Generates a secure URL-safe 7-day token and invite link."
+            "description": "Admin generates a new staff invitation with role assignment, clinical credentials, and target facility. Generates a secure URL-safe 7-day token and invite link."
           },
           "response": [
             {
@@ -138,7 +156,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7b0a8c23-4e89-4a90-b184-904d9c79e612\",\n    \"email\": \"dr.sarah.smith@example.com\",\n    \"full_name\": \"Dr. Sarah Smith\",\n    \"role_code\": \"practitioner\",\n    \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n    \"token\": \"dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\",\n    \"expires_at\": \"2026-09-27T10:00:00Z\",\n    \"status\": \"pending\",\n    \"invite_url\": \"/staff/accept?token=dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-001\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"7b0a8c23-4e89-4a90-b184-904d9c79e612\",\n    \"email\": \"dr.sarah.smith@example.com\",\n    \"full_name\": \"Dr. Sarah Smith\",\n    \"role_code\": \"practitioner\",\n    \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n    \"specialty\": \"Cardiology\",\n    \"specialty_id\": \"01955b20-1111-7000-8000-000000000001\",\n    \"sub_specialty_id\": \"01955b20-2222-7000-8000-000000000001\",\n    \"designation_id\": \"01955b20-3333-7000-8000-000000000001\",\n    \"medical_council_reg_no\": \"MCI-2014-987654\",\n    \"token\": \"dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\",\n    \"expires_at\": \"2026-09-27T10:00:00Z\",\n    \"status\": \"pending\",\n    \"invite_url\": \"/staff/accept?token=dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-001\"\n  }\n}"
             },
             {
               "name": "Forbidden: Non-Admin Caller (403 Forbidden)",
@@ -197,7 +215,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"id\": \"7b0a8c23-4e89-4a90-b184-904d9c79e612\",\n        \"email\": \"dr.sarah.smith@example.com\",\n        \"full_name\": \"Dr. Sarah Smith\",\n        \"role_code\": \"practitioner\",\n        \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n        \"status\": \"pending\",\n        \"token\": \"dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\",\n        \"expires_at\": \"2026-09-27T10:00:00Z\",\n        \"created_at\": \"2026-09-20T10:00:00Z\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"count\": 1,\n    \"request_id\": \"req-inv-002\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"items\": [\n      {\n        \"id\": \"7b0a8c23-4e89-4a90-b184-904d9c79e612\",\n        \"email\": \"dr.sarah.smith@example.com\",\n        \"full_name\": \"Dr. Sarah Smith\",\n        \"role_code\": \"practitioner\",\n        \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n        \"specialty\": \"Cardiology\",\n        \"specialty_id\": \"01955b20-1111-7000-8000-000000000001\",\n        \"sub_specialty_id\": \"01955b20-2222-7000-8000-000000000001\",\n        \"designation_id\": \"01955b20-3333-7000-8000-000000000001\",\n        \"medical_council_reg_no\": \"MCI-2014-987654\",\n        \"status\": \"pending\",\n        \"token\": \"dGhpcy1pcy1hLXNhbXBsZS1pbnZpdGF0aW9uLXRva2Vu\",\n        \"expires_at\": \"2026-09-27T10:00:00Z\",\n        \"created_at\": \"2026-09-20T10:00:00Z\"\n      }\n    ]\n  },\n  \"meta\": {\n    \"count\": 1,\n    \"request_id\": \"req-inv-002\"\n  }\n}"
             }
           ]
         }
@@ -252,7 +270,7 @@
                   "value": "application/json"
                 }
               ],
-              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"valid\": true,\n    \"email\": \"dr.sarah.smith@example.com\",\n    \"full_name\": \"Dr. Sarah Smith\",\n    \"role_code\": \"practitioner\",\n    \"organization_name\": \"Apex Health Systems\",\n    \"organization_id\": \"01a0b95c-3fed-785a-95e0-48cc8d07f2ee\",\n    \"facility_name\": \"Apex Main Hospital\",\n    \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n    \"expires_at\": \"2026-09-27T10:00:00Z\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-003\"\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"valid\": true,\n    \"email\": \"dr.sarah.smith@example.com\",\n    \"full_name\": \"Dr. Sarah Smith\",\n    \"role_code\": \"practitioner\",\n    \"organization_name\": \"Apex Health Systems\",\n    \"organization_id\": \"01a0b95c-3fed-785a-95e0-48cc8d07f2ee\",\n    \"facility_name\": \"Apex Main Hospital\",\n    \"facility_uuid\": \"01a0b95d-d330-7887-8462-7dc6a0190fb8\",\n    \"specialty_id\": \"01955b20-1111-7000-8000-000000000001\",\n    \"sub_specialty_id\": \"01955b20-2222-7000-8000-000000000001\",\n    \"designation_id\": \"01955b20-3333-7000-8000-000000000001\",\n    \"medical_council_reg_no\": \"MCI-2014-987654\",\n    \"expires_at\": \"2026-09-27T10:00:00Z\"\n  },\n  \"meta\": {\n    \"request_id\": \"req-inv-003\"\n  }\n}"
             },
             {
               "name": "Invalid or Expired Token (404/400)",

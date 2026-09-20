@@ -3,7 +3,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
+from ...models.care import Practitioner
+from ...models.masters import Specialty, SubSpecialty, StaffDesignation
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
@@ -36,26 +38,118 @@ async def _admin(db: AsyncSession, account: UserAccount) -> tuple[StaffMember, O
     return staff, organization
 
 
-def _item(member: StaffMember, account: UserAccount, assignments: list[StaffAssignment]) -> dict[str, Any]:
-    return {"uuid": str(member.id), "user_uuid": str(account.id), "display_name": account.display_name, "email": account.email, "status": "active" if member.is_active else "inactive", "role_codes": sorted({a.role_code for a in assignments}), "facility_uuids": [str(a.facility_id) for a in assignments if a.facility_id]}
+def _item(
+    member: StaffMember,
+    account: UserAccount,
+    assignments: list[StaffAssignment],
+    practitioner: Practitioner | None = None,
+    specialty_name: str | None = None,
+    sub_specialty_name: str | None = None,
+    designation_name: str | None = None,
+) -> dict[str, Any]:
+    role_codes = sorted({a.role_code for a in assignments})
+    facility_uuids = [str(a.facility_id) for a in assignments if a.facility_id]
+
+    desig = designation_name
+    if not desig:
+        if "owner" in role_codes:
+            desig = "Owner & Practice Director"
+        elif "organization_admin" in role_codes:
+            desig = "Organization Administrator"
+        elif practitioner:
+            desig = "Practitioner"
+        elif "nurse" in role_codes:
+            desig = "Registered Nurse"
+        elif "facility_operator" in role_codes:
+            desig = "Front Desk & Facility Operator"
+        else:
+            desig = "Staff Member"
+
+    return {
+        "uuid": str(member.id),
+        "user_uuid": str(account.id),
+        "display_name": account.display_name or (practitioner.person_name if practitioner else "Staff Member"),
+        "name": account.display_name or (practitioner.person_name if practitioner else "Staff Member"),
+        "email": account.email or "",
+        "status": "active" if member.is_active else "inactive",
+        "role_codes": role_codes,
+        "facility_uuids": facility_uuids,
+        "is_practitioner": practitioner is not None,
+        "practitioner_uuid": str(practitioner.id) if practitioner else None,
+        "specialty": (practitioner.specialty or specialty_name) if practitioner else None,
+        "specialty_id": str(practitioner.specialty_id) if (practitioner and practitioner.specialty_id) else None,
+        "specialty_name": specialty_name,
+        "sub_specialty_id": str(practitioner.sub_specialty_id) if (practitioner and practitioner.sub_specialty_id) else None,
+        "sub_specialty_name": sub_specialty_name,
+        "designation_id": str(practitioner.designation_id) if (practitioner and practitioner.designation_id) else None,
+        "designation_name": desig,
+        "medical_council_reg_no": practitioner.medical_council_reg_no if practitioner else None,
+        "has_prescription_authority": practitioner.has_prescription_authority if practitioner else False,
+        "prescription_authority_status": practitioner.prescription_authority_status if practitioner else "none",
+    }
 
 
+@staff_router.get("")
 @admin_router.get("")
-async def list_staff(account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)], facility_uuid: str | None = None, status: str = "active", q: str | None = None) -> dict[str, Any]:
-    _, organization = await _admin(db, account)
+async def list_staff(
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    facility_uuid: str | None = None,
+    status: str = "active",
+    q: str | None = None,
+) -> dict[str, Any]:
+    staff, organization = await _staff_context(db, account)
     parsed_facility = UUID(facility_uuid) if facility_uuid and facility_uuid.lower() != "all" else None
-    query = select(StaffMember, UserAccount).join(UserAccount, UserAccount.id == StaffMember.user_account_id).where(StaffMember.organization_id == organization.id)
+    query = (
+        select(
+            StaffMember,
+            UserAccount,
+            Practitioner,
+            Specialty.name.label("specialty_name"),
+            SubSpecialty.name.label("sub_specialty_name"),
+            StaffDesignation.name.label("designation_name"),
+        )
+        .join(UserAccount, UserAccount.id == StaffMember.user_account_id)
+        .outerjoin(
+            Practitioner,
+            and_(
+                Practitioner.user_account_id == StaffMember.user_account_id,
+                Practitioner.organization_id == StaffMember.organization_id,
+                Practitioner.is_active.is_(True),
+            ),
+        )
+        .outerjoin(Specialty, Specialty.id == Practitioner.specialty_id)
+        .outerjoin(SubSpecialty, SubSpecialty.id == Practitioner.sub_specialty_id)
+        .outerjoin(StaffDesignation, StaffDesignation.id == Practitioner.designation_id)
+        .where(StaffMember.organization_id == organization.id)
+    )
     if status == "active":
         query = query.where(StaffMember.is_active.is_(True))
     if q:
-        query = query.where(UserAccount.display_name.ilike(f"%{q}%"))
+        query = query.where(
+            or_(
+                UserAccount.display_name.ilike(f"%{q}%"),
+                UserAccount.email.ilike(f"%{q}%"),
+                Practitioner.person_name.ilike(f"%{q}%"),
+            )
+        )
     rows = (await db.execute(query)).all()
     items = []
-    for member, user in rows:
-        assignments = (await db.scalars(select(StaffAssignment).where(StaffAssignment.staff_member_id == member.id, StaffAssignment.is_active.is_(True), *( [StaffAssignment.facility_id == parsed_facility] if parsed_facility else [])))).all()
-        if parsed_facility and not assignments:
-            continue
-        items.append(_item(member, user, assignments))
+    for member, user, practitioner, spec_name, sub_spec_name, desig_name in rows:
+        assignments = (
+            await db.scalars(
+                select(StaffAssignment).where(
+                    StaffAssignment.staff_member_id == member.id,
+                    StaffAssignment.is_active.is_(True),
+                )
+            )
+        ).all()
+        if parsed_facility:
+            has_facility = any(a.facility_id == parsed_facility for a in assignments)
+            is_org_admin = any(a.role_code in ["organization_admin", "owner", "administrator"] for a in assignments)
+            if not has_facility and not is_org_admin:
+                continue
+        items.append(_item(member, user, assignments, practitioner, spec_name, sub_spec_name, desig_name))
     return {"success": True, "data": {"items": items}, "meta": {"count": len(items)}}
 
 
@@ -218,6 +312,10 @@ async def create_invitation(
         email=payload.email.lower().strip(),
         full_name=payload.full_name.strip(),
         role_code=payload.role_code,
+        specialty_id=payload.specialty_id,
+        sub_specialty_id=payload.sub_specialty_id,
+        designation_id=payload.designation_id,
+        medical_council_reg_no=payload.medical_council_reg_no,
         token=token,
         expires_at=expires_at,
         status="pending",
@@ -240,6 +338,10 @@ async def create_invitation(
             "email": invite.email,
             "full_name": invite.full_name,
             "role_code": invite.role_code,
+            "specialty_id": str(invite.specialty_id) if invite.specialty_id else None,
+            "sub_specialty_id": str(invite.sub_specialty_id) if invite.sub_specialty_id else None,
+            "designation_id": str(invite.designation_id) if invite.designation_id else None,
+            "medical_council_reg_no": invite.medical_council_reg_no,
             "facility_uuid": str(invite.facility_id) if invite.facility_id else None,
             "token": invite.token,
             "expires_at": invite.expires_at.isoformat(),
@@ -248,6 +350,7 @@ async def create_invitation(
         },
         "meta": {},
     }
+
 
 
 @staff_router.get("/invitations")
@@ -270,6 +373,10 @@ async def list_invitations(
             "email": inv.email,
             "full_name": inv.full_name,
             "role_code": inv.role_code,
+            "specialty_id": str(inv.specialty_id) if inv.specialty_id else None,
+            "sub_specialty_id": str(inv.sub_specialty_id) if inv.sub_specialty_id else None,
+            "designation_id": str(inv.designation_id) if inv.designation_id else None,
+            "medical_council_reg_no": inv.medical_council_reg_no,
             "facility_uuid": str(inv.facility_id) if inv.facility_id else None,
             "status": inv.status,
             "token": inv.token,
@@ -279,6 +386,7 @@ async def list_invitations(
         for inv in invites
     ]
     return {"success": True, "data": {"items": items}, "meta": {"count": len(items)}}
+
 
 
 @staff_router.get("/invitations/validate")
@@ -307,6 +415,10 @@ async def validate_invitation(
             "email": invite.email,
             "full_name": invite.full_name,
             "role_code": invite.role_code,
+            "specialty_id": str(invite.specialty_id) if invite.specialty_id else None,
+            "sub_specialty_id": str(invite.sub_specialty_id) if invite.sub_specialty_id else None,
+            "designation_id": str(invite.designation_id) if invite.designation_id else None,
+            "medical_council_reg_no": invite.medical_council_reg_no,
             "organization_name": org.name if org else "Clinic",
             "organization_id": str(org.id) if org else None,
             "facility_name": fac.name if fac else None,
@@ -315,6 +427,7 @@ async def validate_invitation(
         },
         "meta": {},
     }
+
 
 
 @staff_router.post("/invitations/accept")
@@ -393,22 +506,46 @@ async def accept_invitation(
 
     if invite.role_code in ["practitioner", "doctor"]:
         from ...models.care import Practitioner
+        from ...models.masters import Specialty
         pract = await db.scalar(
             select(Practitioner).where(
                 Practitioner.user_account_id == account.id,
                 Practitioner.organization_id == invite.organization_id,
             )
         )
+        spec_name = "General Practice"
+        if invite.specialty_id:
+            spec = await db.get(Specialty, invite.specialty_id)
+            if spec:
+                spec_name = spec.name
+
         if not pract:
             db.add(
                 Practitioner(
                     organization_id=invite.organization_id,
                     person_name=account.display_name,
-                    specialty="General Practice",
+                    specialty=spec_name,
+                    specialty_id=invite.specialty_id,
+                    sub_specialty_id=invite.sub_specialty_id,
+                    designation_id=invite.designation_id,
+                    medical_council_reg_no=invite.medical_council_reg_no,
+                    has_prescription_authority=True,
+                    prescription_authority_status="authorized",
                     user_account_id=account.id,
                     is_active=True,
                 )
             )
+        else:
+            if invite.specialty_id:
+                pract.specialty_id = invite.specialty_id
+                pract.specialty = spec_name
+            if invite.sub_specialty_id:
+                pract.sub_specialty_id = invite.sub_specialty_id
+            if invite.designation_id:
+                pract.designation_id = invite.designation_id
+            if invite.medical_council_reg_no:
+                pract.medical_council_reg_no = invite.medical_council_reg_no
+
 
     invite.status = "accepted"
     invite.accepted_at = datetime.now(UTC)
