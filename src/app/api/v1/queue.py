@@ -124,6 +124,7 @@ def _item(
         "token_number": entry.token_number,
         "token_label": f"T-{entry.token_number}",
         "status": entry.status,
+        "is_active": entry.status in ACTIVE_QUEUE_STATUSES,
         "reason_code": entry.reason_code,
         "called_at": entry.called_at.isoformat() if entry.called_at else None,
     }
@@ -253,6 +254,7 @@ async def _transition(
     account: UserAccount,
     db: AsyncSession,
     called: bool = False,
+    idempotent: bool = False,
 ) -> QueueEntry:
     entry = await db.scalar(
         select(QueueEntry).where(QueueEntry.id == queue_entry_uuid).with_for_update()
@@ -260,6 +262,8 @@ async def _transition(
     if entry is None:
         raise HTTPException(status_code=404, detail="Queue entry not found.")
     await _scope(db, account, entry.facility_id)
+    if idempotent and entry.status == target:
+        return entry
     if entry.status not in expected:
         raise HTTPException(
             status_code=409,
@@ -292,7 +296,13 @@ async def call_queue_entry(
         "success": True,
         "data": _item(
             await _transition(
-                queue_entry_uuid, {"waiting", "skipped"}, "called", account, db, True
+                queue_entry_uuid,
+                {"waiting", "skipped"},
+                "called",
+                account,
+                db,
+                called=True,
+                idempotent=True,
             )
         ),
         "meta": {},
@@ -323,32 +333,38 @@ async def check_in(
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found.")
     await _scope(db, account, appointment.facility_id)
-    if appointment.status == "checked_in":
-        entry = await db.scalar(
-            select(QueueEntry).where(QueueEntry.appointment_id == appointment.id)
-        )
-        if entry is not None:
-            return {"success": True, "data": _item(entry), "meta": {"reused": True}}
-    if appointment.status != "booked":
+    if appointment.status not in {"booked", "confirmed", "checked_in"}:
         raise HTTPException(
             status_code=409,
             detail="Appointment cannot be checked in from its current state.",
         )
-    entry = QueueEntry(
-        organization_id=appointment.organization_id,
-        facility_id=appointment.facility_id,
-        appointment_id=appointment.id,
-        patient_id=appointment.patient_id,
-        practitioner_id=appointment.practitioner_id,
-        queue_date=date.today(),
-        token_number=await _next_token(db, appointment.facility_id, date.today()),
-        reason_code=appointment.reason_code,
-        reason_text=appointment.reason_text,
+    entry = await db.scalar(
+        select(QueueEntry).where(QueueEntry.appointment_id == appointment.id)
     )
+    reused = entry is not None
+    if reused and appointment.status == "checked_in":
+        return {"success": True, "data": _item(entry), "meta": {"reused": True}}
+    if entry is None:
+        today = date.today()
+        entry = QueueEntry(
+            organization_id=appointment.organization_id,
+            facility_id=appointment.facility_id,
+            appointment_id=appointment.id,
+            patient_id=appointment.patient_id,
+            practitioner_id=appointment.practitioner_id,
+            queue_date=today,
+            token_number=await _next_token(db, appointment.facility_id, today),
+            reason_code=appointment.reason_code,
+            reason_text=appointment.reason_text,
+        )
+        db.add(entry)
     appointment.status = "checked_in"
-    db.add(entry)
     await db.commit()
-    return {"success": True, "data": _item(entry), "meta": {}}
+    return {
+        "success": True,
+        "data": _item(entry),
+        "meta": {"reused": True} if reused else {},
+    }
 
 
 @router.post("/queue/{queue_entry_uuid}/cancel")

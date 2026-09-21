@@ -72,14 +72,19 @@ async def _require_encounter_access(db: AsyncSession, account: UserAccount, allo
     raise HTTPException(status_code=403, detail="Facility access is not permitted.")
 
 
-async def _read_encounter(db: AsyncSession, account: UserAccount, encounter_uuid: UUID) -> Encounter:
-    row = (
-        await db.execute(
-            select(Encounter, _encounter_access(account.id).label("allowed")).where(
-                Encounter.id == encounter_uuid
-            )
-        )
-    ).first()
+async def _read_encounter(
+    db: AsyncSession,
+    account: UserAccount,
+    encounter_uuid: UUID,
+    *,
+    lock: bool = False,
+) -> Encounter:
+    query = select(
+        Encounter, _encounter_access(account.id).label("allowed")
+    ).where(Encounter.id == encounter_uuid)
+    if lock:
+        query = query.with_for_update(of=Encounter)
+    row = (await db.execute(query)).first()
     if row is None:
         raise HTTPException(status_code=404, detail="Encounter not found.")
     encounter, allowed = row
@@ -87,8 +92,14 @@ async def _read_encounter(db: AsyncSession, account: UserAccount, encounter_uuid
     return encounter
 
 
-async def _encounter(db: AsyncSession, account: UserAccount, encounter_uuid: UUID) -> Encounter:
-    encounter = await _read_encounter(db, account, encounter_uuid)
+async def _encounter(
+    db: AsyncSession,
+    account: UserAccount,
+    encounter_uuid: UUID,
+    *,
+    lock: bool = False,
+) -> Encounter:
+    encounter = await _read_encounter(db, account, encounter_uuid, lock=lock)
     if encounter.status != "in_progress":
         raise HTTPException(status_code=409, detail="Encounter is no longer editable.")
     return encounter
@@ -158,7 +169,7 @@ async def upsert_soap(
 
 @router.post("/encounters/{encounter_uuid}/soap/sign")
 async def sign_soap(encounter_uuid: UUID, account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)]) -> dict[str, Any]:
-    encounter = await _encounter(db, account, encounter_uuid)
+    encounter = await _encounter(db, account, encounter_uuid, lock=True)
     await _practitioner(db, account, encounter)
     note = await db.scalar(select(SoapNote).where(SoapNote.encounter_id == encounter.id))
     if note is None:

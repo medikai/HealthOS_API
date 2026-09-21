@@ -200,6 +200,78 @@ class SoapNote(Base):
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
+class PatientDocument(Base):
+    __tablename__ = "patient_document"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('lab_report', 'imaging_report', 'prescription', "
+            "'discharge_summary', 'other')",
+            name="ck_care_patient_document_category",
+        ),
+        CheckConstraint(
+            "status IN ('uploading', 'processing', 'available', 'rejected')",
+            name="ck_care_patient_document_status",
+        ),
+        Index(
+            "ix_care_patient_document_patient_date",
+            "patient_id",
+            "document_date",
+        ),
+        {"schema": "care"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("organization.organization.id"), index=True
+    )
+    patient_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("identity.patient.id"), index=True
+    )
+    encounter_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("care.encounter.id"), index=True
+    )
+    uploaded_by_user_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("identity.user_account.id"), index=True
+    )
+    category: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(String(120))
+    document_date: Mapped[date] = mapped_column(Date)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    declared_mime_type: Mapped[str] = mapped_column(String(64))
+    expected_size_bytes: Mapped[int] = mapped_column(Integer)
+    expected_sha256: Mapped[str] = mapped_column(String(64))
+    storage_key: Mapped[str] = mapped_column(String(255), unique=True)
+    status: Mapped[str] = mapped_column(String(32), default="uploading", index=True)
+    mime_type: Mapped[str | None] = mapped_column(String(64), default=None)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, default=None)
+    sha256: Mapped[str | None] = mapped_column(String(64), default=None)
+    storage_generation: Mapped[str | None] = mapped_column(String(64), default=None)
+    rejection_reason: Mapped[str | None] = mapped_column(String(255), default=None)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    scanned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, index=True
+    )
+    deleted_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("identity.user_account.id"), default=None
+    )
+    storage_deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+
 class Diagnosis(Base):
     __tablename__ = "diagnosis"
     __table_args__ = {"schema": "care"}

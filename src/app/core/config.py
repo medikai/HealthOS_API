@@ -154,6 +154,11 @@ class CORSSettings(BaseSettings):
     ]
 
 
+class PatientDocumentSettings(BaseSettings):
+    GCS_BUCKET_NAME: str | None = None
+    GCS_SIGNING_SERVICE_ACCOUNT: str | None = None
+
+
 class Settings(
     AppSettings,
     PostgresSettings,
@@ -166,6 +171,7 @@ class Settings(
     CRUDAdminSettings,
     EnvironmentSettings,
     CORSSettings,
+    PatientDocumentSettings,
     FileLoggerSettings,
     ConsoleLoggerSettings,
 ):

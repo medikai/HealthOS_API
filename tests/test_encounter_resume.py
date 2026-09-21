@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
+from src.app.api.v1.clinical import complete_encounter
 from src.app.api.v1.encounters import _start, start_appointment_consultation
 
 
@@ -56,6 +57,62 @@ class EncounterResumeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(raised.exception.detail["code"], "APPOINTMENT_NOT_CHECKED_IN")
+
+    async def test_completed_encounter_cannot_be_restarted(self) -> None:
+        queue = SimpleNamespace(id=UUID(int=1), facility_id=UUID(int=2))
+        encounter = SimpleNamespace(status="completed")
+        db = SimpleNamespace(scalar=AsyncMock(return_value=encounter))
+
+        with patch("src.app.api.v1.encounters._scope", AsyncMock()), self.assertRaises(HTTPException) as raised:
+            await _start(db, SimpleNamespace(), queue=queue)
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    async def test_scheduled_completion_updates_encounter_queue_and_appointment(self) -> None:
+        queue = SimpleNamespace(status="in_consultation")
+        appointment = SimpleNamespace(status="in_consultation")
+        encounter = SimpleNamespace(
+            id=UUID(int=1),
+            queue_entry_id=UUID(int=2),
+            appointment_id=UUID(int=3),
+            status="in_progress",
+            completed_at=None,
+        )
+        db = SimpleNamespace(
+            get=AsyncMock(side_effect=[queue, appointment]), commit=AsyncMock()
+        )
+
+        with patch(
+            "src.app.api.v1.clinical._encounter", AsyncMock(return_value=encounter)
+        ):
+            response = await complete_encounter(
+                encounter.id, SimpleNamespace(), db
+            )
+
+        self.assertEqual(response["data"]["status"], "completed")
+        self.assertEqual(queue.status, "completed")
+        self.assertEqual(appointment.status, "completed")
+        db.commit.assert_awaited_once()
+
+    async def test_walk_in_completion_updates_encounter_and_queue(self) -> None:
+        queue = SimpleNamespace(status="in_consultation")
+        encounter = SimpleNamespace(
+            id=UUID(int=1),
+            queue_entry_id=UUID(int=2),
+            appointment_id=None,
+            status="in_progress",
+            completed_at=None,
+        )
+        db = SimpleNamespace(get=AsyncMock(return_value=queue), commit=AsyncMock())
+
+        with patch(
+            "src.app.api.v1.clinical._encounter", AsyncMock(return_value=encounter)
+        ):
+            await complete_encounter(encounter.id, SimpleNamespace(), db)
+
+        self.assertEqual(encounter.status, "completed")
+        self.assertEqual(queue.status, "completed")
+        db.commit.assert_awaited_once()
 
     async def test_checked_in_appointment_updates_all_links_atomically(self) -> None:
         appointment = SimpleNamespace(

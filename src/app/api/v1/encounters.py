@@ -177,7 +177,11 @@ async def _start(
     )
     existing = await db.scalar(query)
     if existing:
-        return existing
+        if existing.status == "in_progress":
+            return existing
+        raise HTTPException(
+            status_code=409, detail="Completed encounters cannot be restarted."
+        )
 
     if appointment:
         queue = await db.scalar(

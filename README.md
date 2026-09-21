@@ -195,6 +195,60 @@ curl -X POST 'http://127.0.0.1:8000/api/v1/tasks/task?message=hello'
 
 More examples (superuser creation, tiers, rate limits, admin usage) in the [docs](https://benavlabs.github.io/FastAPI-boilerplate/getting-started/first-run/).
 
+## Patient documents (private GCS)
+
+Set `GCS_BUCKET_NAME` and `GCS_SIGNING_SERVICE_ACCOUNT` in `src/.env`. The
+settings are loaded lazily:
+unconfigured document operations fail closed with `503`, while unrelated routes
+continue to work.
+
+Local development uses Application Default Credentials without a downloaded key:
+
+```bash
+gcloud auth application-default login \
+  --impersonate-service-account=<SIGNING_SERVICE_ACCOUNT>
+```
+
+Run FastAPI normally and use `http://localhost:8000/api` as the local API base.
+All document endpoints are relative `/v1/...` routes, so the same code works behind
+the live API base without a backend hostname setting. To verify the workflow:
+
+1. Authenticated `POST /v1/encounters/{encounter_uuid}/documents` with the JSON
+   metadata and a browser-computed SHA-256.
+2. `PUT` the bytes to the returned GCS URL with every returned header and no
+   HealthOS bearer token.
+3. Authenticated `POST` to the returned document's `/complete` route.
+4. Confirm `GET /v1/encounters/{encounter_uuid}/documents/{document_uuid}` returns
+   `available` with a short-lived `download_url`.
+
+The browser initiates an upload with the API, sends the returned `PUT` and every
+returned header directly to GCS, then calls the completion endpoint. Completion
+streams and verifies the stored object's metadata, generation, size, SHA-256, and
+PDF/JPEG/PNG magic bytes before making it available.
+
+Configure bucket CORS for browser uploads with frontend origins only (never an API
+path), method `PUT`, and request headers `Content-Type`,
+`x-goog-if-generation-match`, `x-goog-meta-document-uuid`, and
+`x-goog-meta-sha256`. For example:
+
+```json
+[
+  {
+    "origin": [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "https://medikai.in"
+    ],
+    "method": ["PUT"],
+    "responseHeader": ["Content-Type", "ETag", "x-goog-generation"],
+    "maxAgeSeconds": 3600
+  }
+]
+```
+
+Apply that policy to the existing private bucket using your normal infrastructure
+workflow. The application does not create or modify Google Cloud resources.
+
 ## Contributing
 
 Read [contributing](CONTRIBUTING.md).
