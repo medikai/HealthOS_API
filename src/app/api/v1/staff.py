@@ -1,17 +1,20 @@
+import json
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import and_, delete, or_, select
-from ...models.care import Practitioner
+from ...core.availability import WEEKDAYS
+from ...core.timezones import timezone
+from ...models.care import Practitioner, PractitionerAvailabilityRule
 from ...models.masters import Specialty, SubSpecialty, StaffDesignation
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
 from ...core.security import create_access_token, get_password_hash
 from ...models.identity import UserAccount
-from ...models.organization import Facility, Organization, StaffAssignment, StaffInvitation, StaffMember
+from ...models.organization import Facility, FacilitySchedule, Organization, StaffAssignment, StaffInvitation, StaffMember
 from ...schemas.staff import (
     StaffAssignmentsInput,
     StaffRolesInput,
@@ -505,8 +508,6 @@ async def accept_invitation(
             assignment.facility_id = target_facility_id
 
     if invite.role_code in ["practitioner", "doctor"]:
-        from ...models.care import Practitioner
-        from ...models.masters import Specialty
         pract = await db.scalar(
             select(Practitioner).where(
                 Practitioner.user_account_id == account.id,
@@ -520,21 +521,21 @@ async def accept_invitation(
                 spec_name = spec.name
 
         if not pract:
-            db.add(
-                Practitioner(
-                    organization_id=invite.organization_id,
-                    person_name=account.display_name,
-                    specialty=spec_name,
-                    specialty_id=invite.specialty_id,
-                    sub_specialty_id=invite.sub_specialty_id,
-                    designation_id=invite.designation_id,
-                    medical_council_reg_no=invite.medical_council_reg_no,
-                    has_prescription_authority=True,
-                    prescription_authority_status="authorized",
-                    user_account_id=account.id,
-                    is_active=True,
-                )
+            pract = Practitioner(
+                organization_id=invite.organization_id,
+                person_name=account.display_name,
+                specialty=spec_name,
+                specialty_id=invite.specialty_id,
+                sub_specialty_id=invite.sub_specialty_id,
+                designation_id=invite.designation_id,
+                medical_council_reg_no=invite.medical_council_reg_no,
+                has_prescription_authority=True,
+                prescription_authority_status="authorized",
+                user_account_id=account.id,
+                is_active=True,
             )
+            db.add(pract)
+            await db.flush()
         else:
             if invite.specialty_id:
                 pract.specialty_id = invite.specialty_id
@@ -545,6 +546,28 @@ async def accept_invitation(
                 pract.designation_id = invite.designation_id
             if invite.medical_council_reg_no:
                 pract.medical_council_reg_no = invite.medical_council_reg_no
+
+        has_working_hours = await db.scalar(select(PractitionerAvailabilityRule.id).where(
+            PractitionerAvailabilityRule.facility_id == target_facility_id,
+            PractitionerAvailabilityRule.practitioner_id == pract.id,
+        )) if target_facility_id else None
+        schedule = await db.scalar(select(FacilitySchedule).where(
+            FacilitySchedule.facility_id == target_facility_id,
+        )) if target_facility_id and not has_working_hours else None
+        if schedule:
+            valid_from = datetime.now(timezone(schedule.timezone)).date()
+            for weekday in json.loads(schedule.days_of_week):
+                if weekday.lower() in WEEKDAYS:
+                    db.add(PractitionerAvailabilityRule(
+                        organization_id=invite.organization_id,
+                        facility_id=target_facility_id,
+                        practitioner_id=pract.id,
+                        weekday=WEEKDAYS.index(weekday.lower()),
+                        start_time=time.fromisoformat(schedule.operating_start),
+                        end_time=time.fromisoformat(schedule.operating_end),
+                        slot_duration_minutes=schedule.slot_interval_minutes,
+                        valid_from=valid_from,
+                    ))
 
 
     invite.status = "accepted"
@@ -585,4 +608,3 @@ async def accept_invitation(
 
 router.include_router(admin_router)
 router.include_router(staff_router)
-

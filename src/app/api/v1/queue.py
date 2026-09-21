@@ -323,6 +323,12 @@ async def check_in(
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found.")
     await _scope(db, account, appointment.facility_id)
+    if appointment.status == "checked_in":
+        entry = await db.scalar(
+            select(QueueEntry).where(QueueEntry.appointment_id == appointment.id)
+        )
+        if entry is not None:
+            return {"success": True, "data": _item(entry), "meta": {"reused": True}}
     if appointment.status != "booked":
         raise HTTPException(
             status_code=409,
