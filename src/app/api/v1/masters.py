@@ -1,12 +1,12 @@
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.db.database import async_get_db
-from ...models.masters import Specialty, StaffDesignation, SubSpecialty
+from ...models.masters import MedicalCouncil, Specialty, StaffDesignation, SubSpecialty
 from ...schemas.masters import (
     SpecialtyCreate,
     StaffDesignationCreate,
@@ -46,6 +46,71 @@ FALLBACK_DESIGNATIONS = [
     {"uuid": "01a0b95d-0003-7000-8000-000000000008", "code": "practitioner", "name": "Practitioner", "category": "clinical", "is_active": True},
     {"uuid": "01a0b95d-0003-7000-8000-000000000009", "code": "administrator", "name": "Administrator", "category": "administrative", "is_active": True},
 ]
+
+MEDICAL_COUNCILS = [
+    ("nmc", "National Medical Commission", None),
+    ("apmc", "Andhra Pradesh Medical Council", "AP"),
+    ("arpmc", "Arunachal Pradesh Medical Council", "AR"),
+    ("amc", "Assam Medical Council", "AS"),
+    ("bmc", "Bihar Medical Council", "BR"),
+    ("cgmc", "Chattisgarh Medical Council", "CG"),
+    ("dmc", "Delhi Medical Council", "DL"),
+    ("gmc_goa", "Goa Medical Council", "GA"),
+    ("gmc_gujarat", "Gujarat Medical Council", "GJ"),
+    ("hmc", "Haryana Medical Council", "HR"),
+    ("hpmc", "Himanchal Pradesh Medical Council", "HP"),
+    ("jkmc", "Jammu & Kashmir Medical Council", "JK"),
+    ("jmc", "Jharkhand Medical Council", "JH"),
+    ("kmc", "Karnataka Medical Council", "KA"),
+    ("kerala_mc", "Kerala Medical Council", "KL"),
+    ("mpmc", "Madhya Pradesh Medical Council", "MP"),
+    ("mmc", "Maharashtra Medical Council", "MH"),
+    ("manipur_mc", "Manipur Medical Council", "MN"),
+    ("mizoram_mc", "Mizoram Medical Council", "MZ"),
+    ("nagaland_mc", "Nagaland Medical Council", "NL"),
+    ("ocmr", "Orissa Council of Medical Registration", "OD"),
+    ("pmc", "Punjab Medical Council", "PB"),
+    ("rmc", "Rajasthan Medical Council", "RJ"),
+    ("smc", "Sikkim Medical Council", "SK"),
+    ("tnmc", "Tamil Nadu Medical Council", "TN"),
+    ("tsmc", "Telangana State Medical Council", "TS"),
+    ("tripura_smc", "Tripura State Medical Council", "TR"),
+    ("upmc", "Uttar Pradesh Medical Council", "UP"),
+    ("ukmc", "Uttarakhand Medical Council", "UK"),
+    ("wbmc", "West Bengal Medical Council", "WB"),
+]
+FALLBACK_MEDICAL_COUNCILS = [
+    {"uuid": str(uuid5(NAMESPACE_URL, f"healthos:medical-council:{code}")), "code": code, "name": name, "state_code": state_code, "country_code": "IN", "is_active": True}
+    for code, name, state_code in MEDICAL_COUNCILS
+]
+
+
+@router.get("/medical-councils")
+async def list_medical_councils(
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    is_active: bool = True,
+) -> dict[str, Any]:
+    try:
+        query = select(MedicalCouncil).order_by(MedicalCouncil.name)
+        if is_active:
+            query = query.where(MedicalCouncil.is_active.is_(True))
+        records = (await db.scalars(query)).all()
+        if records:
+            items = [
+                {
+                    "uuid": str(council.id),
+                    "code": council.code,
+                    "name": council.name,
+                    "state_code": council.state_code,
+                    "country_code": council.country_code,
+                    "is_active": council.is_active,
+                }
+                for council in records
+            ]
+            return {"success": True, "data": {"items": items}, "meta": {"count": len(items)}}
+    except Exception:
+        pass
+    return {"success": True, "data": {"items": FALLBACK_MEDICAL_COUNCILS}, "meta": {"count": len(FALLBACK_MEDICAL_COUNCILS)}}
 
 
 @router.get("/specialties")

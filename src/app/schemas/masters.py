@@ -1,5 +1,6 @@
 from datetime import datetime
 from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -84,6 +85,7 @@ class PractitionerCreate(BaseModel):
     specialty_id: UUID | None = None
     sub_specialty_id: UUID | None = None
     designation_id: UUID | None = None
+    medical_council_id: UUID | None = None
     medical_council_reg_no: str | None = None
     has_prescription_authority: bool = True
     prescription_authority_status: str = "authorized"
@@ -96,6 +98,7 @@ class PractitionerUpdate(BaseModel):
     specialty_id: UUID | None = None
     sub_specialty_id: UUID | None = None
     designation_id: UUID | None = None
+    medical_council_id: UUID | None = None
     medical_council_reg_no: str | None = None
     has_prescription_authority: bool | None = None
     prescription_authority_status: str | None = None
@@ -112,6 +115,8 @@ class PractitionerRead(BaseModel):
     sub_specialty_name: str | None = None
     designation_id: UUID | None = None
     designation_name: str | None = None
+    medical_council_id: UUID | None = None
+    medical_council_name: str | None = None
     medical_council_reg_no: str | None = None
     has_prescription_authority: bool = True
     prescription_authority_status: str = "authorized"

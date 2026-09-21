@@ -1,32 +1,39 @@
-import json
 import secrets
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_, delete, or_, select
-from ...core.availability import WEEKDAYS
-from ...core.timezones import timezone
-from ...models.care import Practitioner, PractitionerAvailabilityRule
-from ...models.masters import Specialty, SubSpecialty, StaffDesignation
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from ...api.dependencies import get_current_identity_account
+from ...core.availability import rules_from_facility_schedule
+from ...core.config import settings
 from ...core.db.database import async_get_db
 from ...core.security import create_access_token, get_password_hash
+from ...domains.auth.logto import logto_oidc_client
+from ...domains.governance.audit import record_audit
+from ...models.care import Practitioner, PractitionerAvailabilityRule
 from ...models.identity import UserAccount
-from ...models.organization import Facility, FacilitySchedule, Organization, StaffAssignment, StaffInvitation, StaffMember
+from ...models.masters import Specialty, StaffDesignation, SubSpecialty
+from ...models.organization import (
+    Facility,
+    FacilitySchedule,
+    Organization,
+    StaffAssignment,
+    StaffInvitation,
+    StaffMember,
+)
 from ...schemas.staff import (
     StaffAssignmentsInput,
-    StaffRolesInput,
     StaffCreate,
-    StaffUpdate,
-    StaffInviteCreate,
     StaffInviteAccept,
+    StaffInviteCreate,
+    StaffRolesInput,
+    StaffUpdate,
 )
-from ...core.config import settings
-from ...domains.auth.logto import logto_oidc_client
 from .bootstrap import _staff_context
-from ...domains.governance.audit import record_audit
 
 router = APIRouter(tags=["staff"])
 admin_router = APIRouter(prefix="/admin/staff", tags=["admin-staff"])
@@ -555,19 +562,8 @@ async def accept_invitation(
             FacilitySchedule.facility_id == target_facility_id,
         )) if target_facility_id and not has_working_hours else None
         if schedule:
-            valid_from = datetime.now(timezone(schedule.timezone)).date()
-            for weekday in json.loads(schedule.days_of_week):
-                if weekday.lower() in WEEKDAYS:
-                    db.add(PractitionerAvailabilityRule(
-                        organization_id=invite.organization_id,
-                        facility_id=target_facility_id,
-                        practitioner_id=pract.id,
-                        weekday=WEEKDAYS.index(weekday.lower()),
-                        start_time=time.fromisoformat(schedule.operating_start),
-                        end_time=time.fromisoformat(schedule.operating_end),
-                        slot_duration_minutes=schedule.slot_interval_minutes,
-                        valid_from=valid_from,
-                    ))
+            for rule in rules_from_facility_schedule(schedule, invite.organization_id, target_facility_id, pract.id):
+                db.add(rule)
 
 
     invite.status = "accepted"

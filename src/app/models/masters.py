@@ -52,3 +52,18 @@ class StaffDesignation(Base):
     category: Mapped[str | None] = mapped_column(String(64), default="clinical")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+
+
+class MedicalCouncil(Base):
+    """Indian medical registration authority master."""
+
+    __tablename__ = "medical_council"
+    __table_args__ = {"schema": "platform"}
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    state_code: Mapped[str | None] = mapped_column(String(2), default=None)
+    country_code: Mapped[str] = mapped_column(String(2), default="IN")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))

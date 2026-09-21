@@ -11,6 +11,7 @@ from src.app.api.v1.masters import (
     create_staff_designation,
     create_sub_specialty,
     get_specialty,
+    list_medical_councils,
     list_specialties,
     list_staff_designations,
     list_sub_specialties,
@@ -81,6 +82,11 @@ class _MockDB:
 
 
 class MasterEndpointsUnitTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_medical_councils_fallback(self):
+        res = await list_medical_councils(db=_MockDB([]), is_active=True)
+        self.assertEqual(res["meta"]["count"], 30)
+        self.assertIn("mmc", {item["code"] for item in res["data"]["items"]})
+
     async def test_list_specialties_fallback(self):
         db = _MockDB([])
         res = await list_specialties(db=db, is_active=True)

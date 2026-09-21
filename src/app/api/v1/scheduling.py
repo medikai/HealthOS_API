@@ -25,8 +25,8 @@ from ...models.care import (
     PractitionerAvailabilityException,
     PractitionerAvailabilityRule,
 )
-from ...models.masters import Specialty, StaffDesignation, SubSpecialty
 from ...models.identity import Patient, Person, UserAccount
+from ...models.masters import MedicalCouncil, Specialty, StaffDesignation, SubSpecialty
 from ...models.organization import (
     Facility,
     FacilityResource,
@@ -44,7 +44,6 @@ from ...schemas.scheduling import (
     ExceptionBookingCreate,
 )
 from .bootstrap import ADMIN_ROLES, _staff_context
-
 
 router = APIRouter(tags=["scheduling"])
 EXCEPTION_BOOKING_ROLES = {"administrator", "organization_admin", "owner"}
@@ -203,6 +202,7 @@ async def _practitioner_payload(db: AsyncSession, p: Practitioner) -> dict[str, 
     spec_name = None
     sub_spec_name = None
     desig_name = None
+    council_name = None
     if p.specialty_id:
         s = await db.get(Specialty, p.specialty_id)
         if s:
@@ -215,6 +215,11 @@ async def _practitioner_payload(db: AsyncSession, p: Practitioner) -> dict[str, 
         d = await db.get(StaffDesignation, p.designation_id)
         if d:
             desig_name = d.name
+    medical_council_id = getattr(p, "medical_council_id", None)
+    if medical_council_id:
+        council = await db.get(MedicalCouncil, medical_council_id)
+        if council:
+            council_name = council.name
 
     return {
         "uuid": str(p.id),
@@ -226,6 +231,8 @@ async def _practitioner_payload(db: AsyncSession, p: Practitioner) -> dict[str, 
         "sub_specialty_name": sub_spec_name,
         "designation_id": str(p.designation_id) if p.designation_id else None,
         "designation_name": desig_name,
+        "medical_council_id": str(medical_council_id) if medical_council_id else None,
+        "medical_council_name": council_name,
         "medical_council_reg_no": p.medical_council_reg_no,
         "has_prescription_authority": p.has_prescription_authority,
         "prescription_authority_status": p.prescription_authority_status,
@@ -278,6 +285,7 @@ async def practitioners(
             "sub_specialty_name": sub_spec_name,
             "designation_id": str(p.designation_id) if p.designation_id else None,
             "designation_name": desig_name,
+            "medical_council_id": str(value) if (value := getattr(p, "medical_council_id", None)) else None,
             "medical_council_reg_no": p.medical_council_reg_no,
             "has_prescription_authority": p.has_prescription_authority,
             "prescription_authority_status": p.prescription_authority_status,
@@ -305,6 +313,8 @@ async def create_practitioner(
         spec = await db.get(Specialty, payload.specialty_id)
         if spec:
             spec_name = spec.name
+    if payload.medical_council_id and await db.get(MedicalCouncil, payload.medical_council_id) is None:
+        raise HTTPException(status_code=404, detail="Medical council not found.")
 
     practitioner = Practitioner(
         organization_id=org_id,
@@ -313,6 +323,7 @@ async def create_practitioner(
         specialty_id=payload.specialty_id,
         sub_specialty_id=payload.sub_specialty_id,
         designation_id=payload.designation_id,
+        medical_council_id=payload.medical_council_id,
         medical_council_reg_no=payload.medical_council_reg_no,
         has_prescription_authority=payload.has_prescription_authority,
         prescription_authority_status=payload.prescription_authority_status,
@@ -364,6 +375,10 @@ async def update_practitioner(
         practitioner.sub_specialty_id = payload.sub_specialty_id
     if payload.designation_id is not None:
         practitioner.designation_id = payload.designation_id
+    if payload.medical_council_id is not None:
+        if await db.get(MedicalCouncil, payload.medical_council_id) is None:
+            raise HTTPException(status_code=404, detail="Medical council not found.")
+        practitioner.medical_council_id = payload.medical_council_id
     if payload.medical_council_reg_no is not None:
         practitioner.medical_council_reg_no = payload.medical_council_reg_no
     if payload.has_prescription_authority is not None:
