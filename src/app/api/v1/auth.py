@@ -1,21 +1,27 @@
 import secrets
+import uuid as uuid_pkg
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-
-import uuid as uuid_pkg
 from jose import JWTError, jwt
+from sqlalchemy import func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.config import settings
 from ...core.db.database import async_get_db
-from ...core.security import ALGORITHM, SECRET_KEY, create_access_token, get_password_hash, verify_password
+from ...core.security import (
+    ALGORITHM,
+    SECRET_KEY,
+    create_access_token,
+    get_password_hash,
+    verify_password,
+)
 from ...crud.crud_auth_session import crud_auth_sessions
 from ...crud.crud_identity import crud_user_accounts
 from ...domains.auth.logto import logto_oidc_client
 from ...models.identity import UserAccount
+from ...models.masters import MedicalCouncil, Specialty
 from ...models.organization import StaffMember
 from ...schemas.local_auth import LocalLoginPayload, LocalRegisterPayload
 
@@ -92,11 +98,32 @@ async def local_register(
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered.")
 
+    specialty = None
+    if payload.specialty_id:
+        specialty = await db.get(Specialty, payload.specialty_id)
+        if specialty is None or not specialty.is_active:
+            raise HTTPException(status_code=422, detail="Clinical specialty does not exist or is inactive.")
+    elif payload.specialty:
+        clean_code = payload.specialty.strip().lower().replace("&", "and").replace("/", " ").replace(" ", "_")
+        specialty = await db.scalar(select(Specialty).where(or_(
+            Specialty.code == clean_code,
+            func.lower(Specialty.name) == payload.specialty.strip().lower(),
+        )))
+
+    if payload.medical_council_id:
+        council = await db.get(MedicalCouncil, payload.medical_council_id)
+        if council is None or not council.is_active:
+            raise HTTPException(status_code=422, detail="Medical council does not exist or is inactive.")
+
     account = UserAccount(
         logto_user_id=f"local:{payload.email}",
         email=payload.email,
         display_name=payload.name,
         password_hash=get_password_hash(payload.password),
+        registration_specialty=payload.specialty.strip() if payload.specialty else (specialty.name if specialty else None),
+        registration_specialty_id=specialty.id if specialty else None,
+        registration_medical_council_id=payload.medical_council_id,
+        registration_medical_council_reg_no=payload.medical_council_reg_no.strip() if payload.medical_council_reg_no else None,
         is_active=True,
     )
     db.add(account)

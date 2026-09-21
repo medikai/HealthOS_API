@@ -19,7 +19,15 @@ async def create_organization(
     account: Annotated[UserAccount, Depends(get_current_identity_account)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
-    organization = await access_service.create_organization(db, account, payload.name, payload.code)
+    organization = await access_service.create_organization(
+        db,
+        account,
+        payload.name,
+        payload.code,
+        payload.specialty_id,
+        payload.medical_council_id,
+        payload.medical_council_reg_no,
+    )
     return {
         "success": True,
         "data": {

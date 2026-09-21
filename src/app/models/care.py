@@ -34,6 +34,7 @@ class Practitioner(Base):
     specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.specialty.id"), index=True, default=None)
     sub_specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.sub_specialty.id"), index=True, default=None)
     designation_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.staff_designation.id"), index=True, default=None)
+    medical_council_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.medical_council.id"), index=True, default=None)
     medical_council_reg_no: Mapped[str | None] = mapped_column(String(100), default=None)
     prescription_authority_status: Mapped[str] = mapped_column(String(32), default="authorized")
     has_prescription_authority: Mapped[bool] = mapped_column(Boolean, default=True)

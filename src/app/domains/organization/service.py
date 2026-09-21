@@ -1,14 +1,23 @@
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...models.identity import UserAccount
+from ...core.availability import rules_from_facility_schedule
 from ...core.config import settings
-from ...models.organization import Department, Facility, Organization, StaffAssignment, StaffMember
-from ...models.platform import Feature, FeatureAssignment
 from ...domains.auth.logto import logto_oidc_client
+from ...models.identity import UserAccount
+from ...models.masters import MedicalCouncil, Specialty
+from ...models.organization import (
+    Department,
+    Facility,
+    FacilitySchedule,
+    Organization,
+    StaffAssignment,
+    StaffMember,
+)
+from ...models.platform import Feature, FeatureAssignment
 
 VALID_ROLE_CODES = {"organization_admin", "practitioner", "nurse", "receptionist", "billing_staff"}
 
@@ -40,7 +49,16 @@ class AccessService:
         await db.refresh(department)
         return department
 
-    async def create_organization(self, db: AsyncSession, account: UserAccount, name: str, code: str) -> Organization:
+    async def create_organization(
+        self,
+        db: AsyncSession,
+        account: UserAccount,
+        name: str,
+        code: str,
+        specialty_id: uuid.UUID | None = None,
+        medical_council_id: uuid.UUID | None = None,
+        medical_council_reg_no: str | None = None,
+    ) -> Organization:
         if await db.scalar(select(Organization).where((Organization.name == name) | (Organization.code == code))):
             raise HTTPException(status_code=409, detail="Organization name or code already exists.")
         logto_organization_id = None
@@ -57,21 +75,49 @@ class AccessService:
         facility = Facility(organization_id=organization.id, name=f"{name} Main Clinic", code="MAIN", is_active=True)
         db.add(facility)
         await db.flush()
+        schedule = FacilitySchedule(facility_id=facility.id)
+        db.add(schedule)
         member = StaffMember(organization_id=organization.id, user_account_id=account.id)
         db.add(member)
         await db.flush()
         db.add(StaffAssignment(staff_member_id=member.id, facility_id=facility.id, role_code="organization_admin"))
 
         from ...models.care import Practitioner
+        resolved_specialty_id = specialty_id or getattr(account, "registration_specialty_id", None)
+        specialty = await db.get(Specialty, resolved_specialty_id) if resolved_specialty_id else None
+        if resolved_specialty_id and (specialty is None or not specialty.is_active):
+            raise HTTPException(status_code=422, detail="Clinical specialty does not exist or is inactive.")
+        if specialty is None and getattr(account, "registration_specialty", None):
+            entered = account.registration_specialty.strip()
+            specialty = await db.scalar(select(Specialty).where(or_(
+                Specialty.code == entered.lower().replace(" ", "_"),
+                func.lower(Specialty.name) == entered.lower(),
+            )))
+        if specialty is None:
+            specialty = await db.scalar(select(Specialty).where(Specialty.code == "general_practice"))
+
+        resolved_council_id = medical_council_id or getattr(account, "registration_medical_council_id", None)
+        if resolved_council_id:
+            council = await db.get(MedicalCouncil, resolved_council_id)
+            if council is None or not council.is_active:
+                raise HTTPException(status_code=422, detail="Medical council does not exist or is inactive.")
+
         pract = await db.scalar(select(Practitioner).where(Practitioner.user_account_id == account.id))
         if not pract:
-            db.add(Practitioner(
+            pract = Practitioner(
                 organization_id=organization.id,
                 person_name=account.display_name or "Doctor",
-                specialty="General Practice",
+                specialty=specialty.name if specialty else (getattr(account, "registration_specialty", None) or "General Practice"),
+                specialty_id=specialty.id if specialty else None,
+                medical_council_id=resolved_council_id,
+                medical_council_reg_no=medical_council_reg_no or getattr(account, "registration_medical_council_reg_no", None),
                 user_account_id=account.id,
                 is_active=True
-            ))
+            )
+            db.add(pract)
+            await db.flush()
+            for rule in rules_from_facility_schedule(schedule, organization.id, facility.id, pract.id):
+                db.add(rule)
 
         await db.commit()
         await db.refresh(organization)

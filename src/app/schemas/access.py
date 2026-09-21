@@ -7,6 +7,9 @@ class OrganizationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=2, max_length=255)
     code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9_]+$")
+    specialty_id: uuid.UUID | None = None
+    medical_council_id: uuid.UUID | None = None
+    medical_council_reg_no: str | None = Field(default=None, max_length=100)
 
 
 class StaffRoleAssign(BaseModel):

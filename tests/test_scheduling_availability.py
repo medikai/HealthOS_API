@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 from src.app.api.v1.frontend_compat import availability
+from src.app.core.availability import rules_from_facility_schedule
 from src.app.models.care import (
     Appointment,
     PractitionerAvailabilityException,
@@ -66,6 +67,14 @@ class _AvailabilityDb:
 
 
 class SchedulingAvailabilityIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def test_facility_schedule_creates_practitioner_rules(self):
+        schedule = FacilitySchedule(facility_id=FACILITY_ID)
+        rules = rules_from_facility_schedule(
+            schedule, ORGANIZATION_ID, FACILITY_ID, PRACTITIONER_ID
+        )
+        self.assertEqual([rule.weekday for rule in rules], [0, 1, 2, 3, 4, 5])
+        self.assertTrue(all(rule.start_time.isoformat() == "08:00:00" for rule in rules))
+
     async def _request(self, db, day):
         with patch(
             "src.app.api.v1.frontend_compat._scope",

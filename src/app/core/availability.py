@@ -26,6 +26,29 @@ def _clock(value: str) -> time:
     return time.fromisoformat(value)
 
 
+def rules_from_facility_schedule(
+    schedule: FacilitySchedule,
+    organization_id: UUID,
+    facility_id: UUID,
+    practitioner_id: UUID,
+) -> list[PractitionerAvailabilityRule]:
+    valid_from = datetime.now(timezone(schedule.timezone)).date()
+    return [
+        PractitionerAvailabilityRule(
+            organization_id=organization_id,
+            facility_id=facility_id,
+            practitioner_id=practitioner_id,
+            weekday=WEEKDAYS.index(day),
+            start_time=_clock(schedule.operating_start),
+            end_time=_clock(schedule.operating_end),
+            slot_duration_minutes=schedule.slot_interval_minutes,
+            valid_from=valid_from,
+        )
+        for value in json.loads(schedule.days_of_week)
+        if (day := value.lower()) in WEEKDAYS
+    ]
+
+
 def _unavailable(exception: PractitionerAvailabilityException, start: datetime, end: datetime, tz) -> bool:
     if exception.exception_type.lower() in {"available", "extra_hours"}:
         return False
