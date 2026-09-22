@@ -245,6 +245,23 @@ class PatientSearchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("care.encounter", compiled.lower())
                 self.assertEqual(compiled.upper().count("EXISTS (SELECT"), 3)
                 self.assertNotIn("care.appointment, care.encounter", compiled.lower())
+
+    async def test_facility_uuid_scoping_verified_and_filtered(self) -> None:
+        db = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])))
+
+        with patch("src.app.api.v1.patients._org", return_value=self.organization):
+            with patch("src.app.api.v1.patients._scope", new_callable=AsyncMock) as mock_scope:
+                mock_scope.return_value = (self.organization, SimpleNamespace(id=self.facility_id))
+                res = await search_patients(
+                    q="Sharma",
+                    account=self.account,
+                    db=db,
+                    facility_uuid=self.facility_id,
+                )
+
+                mock_scope.assert_awaited_once_with(db, self.account, self.facility_id)
+                self.assertTrue(res["success"])
+
     async def test_short_query_gating_compilation(self) -> None:
         captured_query = None
 

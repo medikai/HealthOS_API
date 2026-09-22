@@ -27,6 +27,7 @@ from ...domains.governance.audit import record_audit
 from ...models.care import (
     Appointment,
     AppointmentBookingException,
+    Encounter,
     Practitioner,
     PractitionerAvailabilityException,
     PractitionerAvailabilityRule,
@@ -1127,6 +1128,7 @@ async def list_appointments(
     db: Annotated[AsyncSession, Depends(async_get_db)] = ...,
     status_filter: str | None = Query(default=None, alias="status"),
     patient_uuid: UUID | None = None,
+    order: str = Query(default="asc", pattern="^(asc|desc)$"),
 ) -> dict[str, Any]:
     if facility_uuid and str(facility_uuid).lower() != "all":
         await _scope(db, account, facility_uuid)
@@ -1137,7 +1139,13 @@ async def list_appointments(
         query = query.where(Appointment.status == status_filter)
     if patient_uuid:
         query = query.where(Appointment.patient_id == patient_uuid)
-    rows = (await db.execute(query.order_by(Appointment.scheduled_start))).all()
+    order_val = order if isinstance(order, str) else getattr(order, "default", "asc")
+    order_clause = (
+        Appointment.scheduled_start.desc()
+        if str(order_val).lower() == "desc"
+        else Appointment.scheduled_start.asc()
+    )
+    rows = (await db.execute(query.order_by(order_clause))).all()
     return {
         "success": True,
         "data": {"items": [appointment_view(*row) for row in rows]},

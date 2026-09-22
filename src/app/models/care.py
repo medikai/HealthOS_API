@@ -49,6 +49,7 @@ class Appointment(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "idempotency_key", name="uq_appointment_org_idempotency"),
         Index("ix_care_appointment_facility_status_start", "facility_id", "status", "scheduled_start"),
+        Index("ix_care_appointment_facility_start", "facility_id", "scheduled_start"),
         {"schema": "care"},
     )
 
@@ -158,7 +159,10 @@ class QueueEntry(Base):
 
 class Encounter(Base):
     __tablename__ = "encounter"
-    __table_args__ = {"schema": "care"}
+    __table_args__ = (
+        Index("ix_care_encounter_facility_started", "facility_id", "started_at"),
+        {"schema": "care"},
+    )
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)

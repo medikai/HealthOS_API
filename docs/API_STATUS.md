@@ -111,6 +111,8 @@ The invitation and onboarding flow is isolated into a standalone Postman collect
 | `PATCH` | `/api/v1/patients/{patient_uuid}` | Update Patient | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/patients/{patient_uuid}/context` | Patient Context | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 | `GET` | `/api/v1/patients/{patient_uuid}/timeline` | Patient Timeline | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/patients/{patient_uuid}/encounters` | List Patient Encounters (Full History with SOAP, Vitals, Diagnoses & Rx) | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
+| `GET` | `/api/v1/patients/{patient_uuid}/prescriptions` | List Patient Prescriptions (All Prescriptions & Items) | BFF Cookie (`healthos_session`) + CSRF | ✅ Active / Implemented |
 
 ### 06. Scheduling & Appointments
 
