@@ -52,6 +52,11 @@ class DatabaseSettings(BaseSettings):
     pass
 
 
+class RedisSettings(BaseSettings):
+    REDIS_QUEUE_HOST: str = "localhost"
+    REDIS_QUEUE_PORT: int = 6379
+
+
 class PostgresSettings(DatabaseSettings):
     POSTGRES_SYNC_URL: str
     POSTGRES_ASYNC_URL: str
@@ -162,6 +167,7 @@ class PatientDocumentSettings(BaseSettings):
 class Settings(
     AppSettings,
     PostgresSettings,
+    RedisSettings,
     HealthOSArchitectureSettings,
     LogtoSettings,
     CryptSettings,

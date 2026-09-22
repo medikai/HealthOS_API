@@ -64,6 +64,7 @@ class Appointment(Base):
     reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
     reason_text: Mapped[str | None] = mapped_column(Text, default=None)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), default=None)
+    version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 
 
@@ -325,6 +326,7 @@ class AuditLog(Base):
     actor_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None, index=True)
     resource_id: Mapped[str | None] = mapped_column(String(128), default=None)
     patient_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC), index=True)
 
 
@@ -344,3 +346,29 @@ class ClinicalDocumentationSetting(Base):
     custom_sections: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default_factory=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class PractitionerSchedule(Base):
+    __tablename__ = "practitioner_schedule"
+    __table_args__ = (
+        Index("ix_care_practitioner_schedule_facility_practitioner_active", "facility_id", "practitioner_id", "is_active"),
+        Index("ix_care_practitioner_schedule_org_practitioner", "organization_id", "practitioner_id"),
+        {"schema": "care"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    facility_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.facility.id"), index=True)
+    practitioner_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.practitioner.id"), index=True)
+    effective_from: Mapped[date] = mapped_column(Date)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
+    slot_interval_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    effective_to: Mapped[date | None] = mapped_column(Date, default=None)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    weekly_hours: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default_factory=list)
+    date_exceptions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default_factory=list)
+    is_override: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    updated_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None, index=True)

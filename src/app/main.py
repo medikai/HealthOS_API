@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from .admin.initialize import create_admin_interface
 from .api import router
 from .core.config import settings
+from .core import events
 from .core.setup import create_application, lifespan_factory
 
 admin = create_admin_interface()
@@ -26,7 +27,11 @@ async def lifespan_with_admin(app: FastAPI) -> AsyncGenerator[None, None]:
             # Initialize admin database and setup
             await admin.initialize()
 
+        events.configure()
+
         yield
+
+        await events.close()
 
 
 app = create_application(router=router, settings=settings, lifespan=lifespan_with_admin)

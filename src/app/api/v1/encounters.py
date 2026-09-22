@@ -9,6 +9,7 @@ from uuid6 import uuid7
 
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
+from ...core.events import make_event, publish
 from ...domains.governance.audit import record_audit
 from ...models.care import Appointment, Encounter, Practitioner, QueueEntry, Vital
 from ...models.identity import Patient, Person, UserAccount
@@ -219,6 +220,7 @@ async def _start(
     )
     db.add(encounter)
     if linked_appointment:
+        linked_appointment.version += 1
         linked_appointment.status = "in_consultation"
     queue.status = "in_consultation"
     try:
@@ -226,6 +228,19 @@ async def _start(
     except Exception:
         await db.rollback()
         raise
+    if linked_appointment:
+        await publish(make_event(
+            "appointment.status_changed", entity_id=linked_appointment.id, entity_version=linked_appointment.version,
+            organization_id=linked_appointment.organization_id, facility_id=linked_appointment.facility_id,
+            practitioner_id=linked_appointment.practitioner_id,
+            new={"status": linked_appointment.status, "date": linked_appointment.scheduled_start.date(), "resource_id": linked_appointment.resource_id},
+        ))
+    await publish(make_event(
+        "queue.changed", entity_id=queue.id, entity_version=None,
+        organization_id=queue.organization_id, facility_id=queue.facility_id,
+        practitioner_id=queue.practitioner_id,
+        new={"date": queue.queue_date, "status": queue.status},
+    ))
     return encounter
 
 
