@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...api.dependencies import get_current_identity_account
 from ...core.appointment_views import patient_view, practitioner_view
 from ...core.db.database import async_get_db
+from ...core.events import make_event, publish
 from ...domains.governance.audit import record_audit
 from ...models.care import Appointment, Practitioner, QueueCounter, QueueEntry
 from ...models.identity import Patient, Person, UserAccount
@@ -221,6 +222,12 @@ async def create_walk_in(
     )
     db.add(entry)
     await db.commit()
+    await publish(make_event(
+        "queue.changed", entity_id=entry.id, entity_version=None,
+        organization_id=entry.organization_id, facility_id=entry.facility_id,
+        practitioner_id=entry.practitioner_id,
+        new={"date": entry.queue_date, "status": entry.status},
+    ))
     return {
         "success": True,
         "data": {"queue_entry": await _walk_in_item(db, entry)},
@@ -263,6 +270,7 @@ async def _transition(
         raise HTTPException(status_code=404, detail="Queue entry not found.")
     await _scope(db, account, entry.facility_id)
     if idempotent and entry.status == target:
+        entry._queue_write_committed = False
         return entry
     if entry.status not in expected:
         raise HTTPException(
@@ -283,6 +291,7 @@ async def _transition(
         patient_id=entry.patient_id,
     )
     await db.commit()
+    entry._queue_write_committed = True
     return entry
 
 
@@ -292,19 +301,20 @@ async def call_queue_entry(
     account: Annotated[UserAccount, Depends(get_current_identity_account)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
+    entry = await _transition(
+        queue_entry_uuid, {"waiting", "skipped"}, "called", account, db,
+        called=True, idempotent=True,
+    )
+    if entry._queue_write_committed:
+        await publish(make_event(
+            "queue.changed", entity_id=entry.id, entity_version=None,
+            organization_id=entry.organization_id, facility_id=entry.facility_id,
+            practitioner_id=entry.practitioner_id,
+            new={"date": entry.queue_date, "status": entry.status},
+        ))
     return {
         "success": True,
-        "data": _item(
-            await _transition(
-                queue_entry_uuid,
-                {"waiting", "skipped"},
-                "called",
-                account,
-                db,
-                called=True,
-                idempotent=True,
-            )
-        ),
+        "data": _item(entry),
         "meta": {},
     }
 
@@ -318,6 +328,12 @@ async def skip_queue_entry(
     entry = await _transition(queue_entry_uuid, {"called"}, "skipped", account, db)
     entry.skip_count += 1
     await db.commit()
+    await publish(make_event(
+        "queue.changed", entity_id=entry.id, entity_version=None,
+        organization_id=entry.organization_id, facility_id=entry.facility_id,
+        practitioner_id=entry.practitioner_id,
+        new={"date": entry.queue_date, "status": entry.status},
+    ))
     return {"success": True, "data": _item(entry), "meta": {}}
 
 
@@ -358,8 +374,23 @@ async def check_in(
             reason_text=appointment.reason_text,
         )
         db.add(entry)
+    old_appointment_status = appointment.status
     appointment.status = "checked_in"
+    appointment.version += 1
     await db.commit()
+    await publish(make_event(
+        "appointment.status_changed", entity_id=appointment.id, entity_version=appointment.version,
+        organization_id=appointment.organization_id, facility_id=appointment.facility_id,
+        practitioner_id=appointment.practitioner_id,
+        old={"status": old_appointment_status, "date": appointment.scheduled_start.date(), "resource_id": appointment.resource_id},
+        new={"status": appointment.status, "date": appointment.scheduled_start.date(), "resource_id": appointment.resource_id},
+    ))
+    await publish(make_event(
+        "queue.changed", entity_id=entry.id, entity_version=None,
+        organization_id=entry.organization_id, facility_id=entry.facility_id,
+        practitioner_id=entry.practitioner_id,
+        new={"date": entry.queue_date, "status": entry.status},
+    ))
     return {
         "success": True,
         "data": _item(entry),
@@ -373,16 +404,17 @@ async def cancel_queue_entry(
     account: Annotated[UserAccount, Depends(get_current_identity_account)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
+    entry = await _transition(
+        queue_entry_uuid, {"waiting", "called", "skipped"}, "cancelled", account, db,
+    )
+    await publish(make_event(
+        "queue.changed", entity_id=entry.id, entity_version=None,
+        organization_id=entry.organization_id, facility_id=entry.facility_id,
+        practitioner_id=entry.practitioner_id,
+        new={"date": entry.queue_date, "status": entry.status},
+    ))
     return {
         "success": True,
-        "data": _item(
-            await _transition(
-                queue_entry_uuid,
-                {"waiting", "called", "skipped"},
-                "cancelled",
-                account,
-                db,
-            )
-        ),
+        "data": _item(entry),
         "meta": {},
     }

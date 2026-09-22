@@ -1,10 +1,6 @@
-import asyncio
-import json
-from datetime import date, datetime, UTC
-from typing import Annotated, Any, AsyncIterator
+from typing import Annotated, Any
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ...api.dependencies import get_current_identity_account
@@ -14,16 +10,6 @@ from ...models.identity import UserAccount
 from .scheduling import _scope
 
 router = APIRouter(tags=["events"])
-
-@router.get("/events/stream")
-async def event_stream(facility_uuid: UUID, account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)]) -> StreamingResponse:
-    await _scope(db, account, facility_uuid)
-    async def stream() -> AsyncIterator[str]:
-        yield ": connected\n\n"
-        while True:
-            yield f"event: queue.updated\ndata: {json.dumps({'facility_uuid': str(facility_uuid), 'occurred_at': datetime.now(UTC).isoformat()})}\n\n"
-            await asyncio.sleep(15)
-    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @router.get("/admin/audit-logs")
 async def audit_logs(facility_uuid: UUID, account: Annotated[UserAccount, Depends(get_current_identity_account)], db: Annotated[AsyncSession, Depends(async_get_db)], action: str | None = None, limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:

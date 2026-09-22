@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
+from ...core.events import make_event, publish
 from ...domains.governance.audit import record_audit
 from ...models.care import (
     Appointment,
@@ -417,8 +418,25 @@ async def complete_encounter(encounter_uuid: UUID, account: Annotated[UserAccoun
     if encounter.appointment_id:
         appointment = await db.get(Appointment, encounter.appointment_id)
         if appointment:
+            old_appointment_status = appointment.status
+            appointment.version += 1
             appointment.status = "completed"
     await db.commit()
+    if encounter.appointment_id and appointment:
+        await publish(make_event(
+            "appointment.status_changed", entity_id=appointment.id, entity_version=appointment.version,
+            organization_id=appointment.organization_id, facility_id=appointment.facility_id,
+            practitioner_id=appointment.practitioner_id,
+            old={"status": old_appointment_status, "date": appointment.scheduled_start.date(), "resource_id": appointment.resource_id},
+            new={"status": appointment.status, "date": appointment.scheduled_start.date(), "resource_id": appointment.resource_id},
+        ))
+    if encounter.queue_entry_id and queue:
+        await publish(make_event(
+            "queue.changed", entity_id=queue.id, entity_version=None,
+            organization_id=queue.organization_id, facility_id=queue.facility_id,
+            practitioner_id=queue.practitioner_id,
+            new={"date": queue.queue_date, "status": queue.status},
+        ))
     return {"success": True, "data": {"uuid": str(encounter.id), "status": encounter.status, "completed_at": encounter.completed_at.isoformat()}, "meta": {}}
 
 

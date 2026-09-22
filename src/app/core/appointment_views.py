@@ -44,6 +44,7 @@ def appointment_view(
         "scheduled_start": appointment.scheduled_start.isoformat(),
         "scheduled_end": appointment.scheduled_end.isoformat(),
         "status": appointment.status,
+        "version": getattr(appointment, "version", 1),
         "reason_code": appointment.reason_code,
         "reason_text": appointment.reason_text,
     }

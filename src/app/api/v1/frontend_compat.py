@@ -23,7 +23,7 @@ async def availability(facility_uuid: UUID, practitioner_uuid: UUID, target_date
     slots = []
     for value in result["slots"]:
         start, end = value["start"][11:16], value["end"][11:16]
-        slots.append({"start": start, "end": end, "startTime": start, "endTime": end, "startIso": value["start"], "endIso": value["end"], "status": value["status"], "bookable": value["bookable"], "reason": value["reason"], "blockType": value["status"] if not value["bookable"] else None, "resourceUuid": value["resource_uuid"]})
+        slots.append({"start": start, "end": end, "startTime": start, "endTime": end, "startIso": value["start"], "endIso": value["end"], "state": value["state"], "status": value["status"], "bookable": value["bookable"], "reason": value["reason"], "blockType": value["status"] if not value["bookable"] else None, "resourceUuid": value["resource_uuid"]})
     next_slot = next((slot for slot in slots if slot["bookable"]), None)
     return {
         "success": True,

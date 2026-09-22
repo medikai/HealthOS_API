@@ -2,7 +2,7 @@ from .identity import AuthSession, LoginTransaction, UserAccount
 from .identity import Patient, Person
 from .care import (
     Appointment, AppointmentBookingException, AuditLog, ClinicalDocumentationSetting, Encounter, Practitioner, PractitionerAvailabilityException,
-    PractitionerAvailabilityRule, Prescription, PrescriptionItem, QueueCounter,
+    PractitionerAvailabilityRule, PractitionerSchedule, Prescription, PrescriptionItem, QueueCounter,
     PatientDocument, QueueEntry, SoapNote, Vital,
 )
 from .organization import Department, Facility, FacilityResource, FacilitySchedule, Organization, ProtectedPeriod, StaffAssignment, StaffInvitation, StaffMember

@@ -25,6 +25,58 @@ class AvailabilityRuleInput(BaseModel):
         return self
 
 
+class AvailabilityRuleBatchItem(BaseModel):
+    day_of_week: int = Field(ge=1, le=7)
+    start_local_time: time
+    end_local_time: time
+    slot_duration_minutes: int = Field(default=30, ge=5, le=240)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.end_local_time <= self.start_local_time:
+            raise ValueError("end_local_time must be after start_local_time")
+        return self
+
+
+class AvailabilityExceptionBatchItem(BaseModel):
+    exception_type: str = Field(min_length=1, max_length=64)
+    start_time: datetime
+    end_time: datetime
+    reason: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        if self.end_time.date() != self.start_time.date():
+            raise ValueError("availability exceptions must start and end on the same date")
+        return self
+
+
+class AvailabilityRulesReplaceInput(BaseModel):
+    facility_uuid: UUID
+    practitioner_uuid: UUID
+    rules: list[AvailabilityRuleBatchItem]
+    exceptions: list[AvailabilityExceptionBatchItem] = Field(default_factory=list)
+    effective_from: date
+    force: bool = False
+
+    @model_validator(mode="after")
+    def validate_rules(self):
+        weekdays = [rule.day_of_week for rule in self.rules]
+        if len(weekdays) != len(set(weekdays)):
+            raise ValueError("rules must not contain duplicate days")
+        if len({rule.slot_duration_minutes for rule in self.rules}) > 1:
+            raise ValueError("all rules must use the same slot_duration_minutes")
+        return self
+
+
+class AvailabilityRulesResetInput(BaseModel):
+    facility_uuid: UUID
+    practitioner_uuid: UUID
+    effective_date: date | None = None
+
+
 class AppointmentCreate(BaseModel):
     facility_uuid: UUID
     practitioner_uuid: UUID
@@ -65,8 +117,10 @@ class AvailabilityExceptionInput(BaseModel):
 class AppointmentReschedule(BaseModel):
     scheduled_start: datetime
     scheduled_end: datetime
+    version: int = Field(ge=1)
     resource_uuid: UUID | None = None
     room_uuid: UUID | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def populate_resource_uuid(self):
