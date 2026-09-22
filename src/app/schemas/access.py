@@ -1,9 +1,32 @@
 import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class OrganizationCreate(BaseModel):
+class FacilityAddress(BaseModel):
+    clinic_name: str | None = Field(default=None, min_length=2, max_length=255)
+    classification: str | None = Field(default=None, max_length=128)
+    street_address: str | None = Field(default=None, max_length=2000)
+    country_id: uuid.UUID | None = None
+    state_id: uuid.UUID | None = None
+    district_id: uuid.UUID | None = None
+    city_id: uuid.UUID | None = None
+    postal_code: str | None = Field(default=None, max_length=32)
+    phone: str | None = Field(default=None, max_length=32)
+    timezone: str = "Asia/Kolkata"
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError:
+            raise ValueError("timezone must be a valid IANA timezone") from None
+        return value
+
+
+class OrganizationCreate(FacilityAddress):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=2, max_length=255)
     code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9_]+$")
@@ -31,7 +54,7 @@ class OrganizationRead(BaseModel):
     code: str
 
 
-class FacilityCreate(BaseModel):
+class FacilityCreate(FacilityAddress):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=2, max_length=255)
     code: str = Field(min_length=2, max_length=64, pattern=r"^[a-z0-9_]+$")

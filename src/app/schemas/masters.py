@@ -1,7 +1,9 @@
 from datetime import datetime
+from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SpecialtyBase(BaseModel):
@@ -90,6 +92,7 @@ class PractitionerCreate(BaseModel):
     has_prescription_authority: bool = True
     prescription_authority_status: str = "authorized"
     user_account_id: UUID | None = None
+    facility_ids: list[UUID] = Field(default_factory=list)
 
 
 class PractitionerUpdate(BaseModel):
@@ -124,3 +127,55 @@ class PractitionerRead(BaseModel):
     is_active: bool = True
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CityCreate(BaseModel):
+    state_id: UUID
+    district_id: UUID | None = None
+    name: str = Field(min_length=1, max_length=255)
+
+
+class MedicineCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=500)
+    manufacturer_name: str | None = Field(default=None, max_length=500)
+    medicine_type: str | None = Field(default=None, max_length=64)
+    pack_size_label: str | None = Field(default=None, max_length=255)
+    composition1: str | None = Field(default=None, max_length=500)
+    composition2: str | None = Field(default=None, max_length=500)
+    price: Decimal | None = Field(default=None, ge=0)
+    is_discontinued: bool = False
+    is_active: bool = True
+
+
+class MedicineUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=500)
+    manufacturer_name: str | None = Field(default=None, max_length=500)
+    medicine_type: str | None = Field(default=None, max_length=64)
+    pack_size_label: str | None = Field(default=None, max_length=255)
+    composition1: str | None = Field(default=None, max_length=500)
+    composition2: str | None = Field(default=None, max_length=500)
+    price: Decimal | None = Field(default=None, ge=0)
+    is_discontinued: bool | None = None
+    is_active: bool | None = None
+
+
+PrescriptionOptionCategory = Literal["dosage", "route", "frequency", "timing", "duration", "instructions"]
+
+
+class PrescriptionOptionCreate(BaseModel):
+    country_code: str = Field(default="IN", min_length=2, max_length=2)
+    category: PrescriptionOptionCategory
+    code: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    label: str = Field(min_length=1, max_length=128)
+    value: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=255)
+    sort_order: int = Field(default=0, ge=0)
+    is_active: bool = True
+
+
+class PrescriptionOptionUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=128)
+    value: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=255)
+    sort_order: int | None = Field(default=None, ge=0)
+    is_active: bool | None = None

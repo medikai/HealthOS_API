@@ -12,6 +12,7 @@ from ...core.appointment_views import appointment_view
 from ...core.availability import (
     evaluate_availability,
     find_legacy_rule_conflicts,
+    rules_from_facility_schedule,
     validate_interval,
 )
 from ...core.db.database import async_get_db
@@ -360,6 +361,21 @@ async def create_practitioner(
     if payload.medical_council_id and await db.get(MedicalCouncil, payload.medical_council_id) is None:
         raise HTTPException(status_code=404, detail="Medical council not found.")
 
+    facility_ids = set(payload.facility_ids)
+    schedule_query = (
+        select(FacilitySchedule)
+        .join(Facility, Facility.id == FacilitySchedule.facility_id)
+        .where(
+            Facility.organization_id == org_id,
+            Facility.is_active.is_(True),
+        )
+    )
+    if facility_ids:
+        schedule_query = schedule_query.where(Facility.id.in_(facility_ids))
+    schedules = list((await db.scalars(schedule_query)).all())
+    if facility_ids - {schedule.facility_id for schedule in schedules}:
+        raise HTTPException(status_code=404, detail="Active facility schedule not found.")
+
     practitioner = Practitioner(
         organization_id=org_id,
         person_name=payload.person_name,
@@ -375,6 +391,9 @@ async def create_practitioner(
         is_active=True,
     )
     db.add(practitioner)
+    for schedule in schedules:
+        for rule in rules_from_facility_schedule(schedule, org_id, schedule.facility_id, practitioner.id):
+            db.add(rule)
     await record_audit(
         db,
         organization_id=org_id,

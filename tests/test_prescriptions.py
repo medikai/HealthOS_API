@@ -14,6 +14,7 @@ class PrescriptionTests(unittest.IsolatedAsyncioTestCase):
                 "advice": "After meals",
                 "medications": [
                     {
+                        "medicine_id": "00000000-0000-0000-0000-000000000123",
                         "name": "Paracetamol",
                         "dose": "500 mg",
                         "frequency": "BID",
@@ -27,6 +28,7 @@ class PrescriptionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(payload.items[0].medicine_name, "Paracetamol")
+        self.assertEqual(payload.items[0].medicine_id, UUID(int=0x123))
         self.assertEqual(payload.items[0].dosage, "500 mg")
         self.assertEqual(payload.items[0].route, "Oral")
         self.assertEqual(payload.items[0].instructions, "After meals")

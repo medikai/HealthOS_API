@@ -38,9 +38,10 @@ class DiagnosisInput(BaseModel):
 
 
 class PrescriptionItemInput(BaseModel):
+    medicine_id: UUID | None = None
     medicine_name: str = Field(
         min_length=1,
-        max_length=255,
+        max_length=500,
         validation_alias=AliasChoices("medicine_name", "name"),
     )
     dosage: str = Field(
@@ -51,7 +52,7 @@ class PrescriptionItemInput(BaseModel):
     frequency: str = Field(min_length=1, max_length=128)
     duration: str = Field(min_length=1, max_length=128)
     strength: str | None = Field(default=None, max_length=128)
-    brand: str | None = Field(default=None, max_length=255)
+    brand: str | None = Field(default=None, max_length=500)
     route: str | None = Field(default=None, max_length=64)
     timing: str | None = Field(default=None, max_length=128)
     instructions: str | None = None
