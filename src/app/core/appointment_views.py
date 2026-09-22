@@ -32,9 +32,15 @@ def appointment_view(
     patient: Any = None,
     person: Any = None,
     practitioner: Any = None,
+    encounter_uuid: str | None = None,
 ) -> dict[str, Any]:
+    resolved_encounter_uuid = (
+        encounter_uuid
+        or (str(eid) if (eid := getattr(appointment, "encounter_uuid", None) or getattr(appointment, "encounter_id", None)) else None)
+    )
     return {
         "uuid": str(appointment.id),
+        "encounter_uuid": resolved_encounter_uuid,
         "facility_uuid": str(appointment.facility_id),
         "patient_uuid": str(appointment.patient_id),
         "practitioner_uuid": str(appointment.practitioner_id),

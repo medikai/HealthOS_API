@@ -19,7 +19,17 @@ from ...core.timezones import (
     to_timezone,
 )
 from ...domains.governance.audit import record_audit
-from ...models.care import Appointment, Encounter, QueueEntry
+from ...models.care import (
+    Appointment,
+    Diagnosis,
+    Encounter,
+    Practitioner,
+    Prescription,
+    PrescriptionItem,
+    QueueEntry,
+    SoapNote,
+    Vital,
+)
 from ...models.identity import Patient, Person, UserAccount
 from ...models.organization import Facility, FacilitySchedule
 from ...schemas.patients import PatientCreate, PatientUpdate
@@ -208,16 +218,20 @@ async def _execute_patient_search(
     offset: int = 0,
     cursor: str | None = None,
     facility_id: UUID | str | None = None,
+    facility_uuid: UUID | str | None = None,
 ) -> dict[str, Any]:
     # Normalize potential FastAPI Query default object if called directly in tests
     target_facility_id: UUID | None = None
-    if isinstance(facility_id, UUID):
-        target_facility_id = facility_id
-    elif isinstance(facility_id, str) and facility_id.strip():
-        try:
-            target_facility_id = UUID(facility_id.strip())
-        except (ValueError, TypeError):
-            target_facility_id = None
+    for candidate in (facility_id, facility_uuid):
+        if isinstance(candidate, UUID):
+            target_facility_id = candidate
+            break
+        elif isinstance(candidate, str) and candidate.strip():
+            try:
+                target_facility_id = UUID(candidate.strip())
+                break
+            except (ValueError, TypeError):
+                pass
 
     # 1. Scope & authorize organization
     organization = await _org(db, account)
@@ -431,6 +445,7 @@ async def list_patients(
     offset: int = Query(default=0, ge=0),
     cursor: str | None = Query(default=None),
     facility_id: UUID | None = Query(default=None),
+    facility_uuid: UUID | None = Query(default=None),
 ) -> dict[str, Any]:
     return await _execute_patient_search(
         db=db,
@@ -440,6 +455,7 @@ async def list_patients(
         offset=offset,
         cursor=cursor,
         facility_id=facility_id,
+        facility_uuid=facility_uuid,
     )
 
 
@@ -452,6 +468,7 @@ async def search_patients(
     offset: int = Query(default=0, ge=0),
     cursor: str | None = Query(default=None),
     facility_id: UUID | None = Query(default=None),
+    facility_uuid: UUID | None = Query(default=None),
 ) -> dict[str, Any]:
     return await _execute_patient_search(
         db=db,
@@ -461,6 +478,7 @@ async def search_patients(
         offset=offset,
         cursor=cursor,
         facility_id=facility_id,
+        facility_uuid=facility_uuid,
     )
 
 
@@ -508,17 +526,21 @@ async def _execute_relevant_patients(
     db: AsyncSession,
     account: UserAccount,
     facility_id: UUID | str | None = None,
+    facility_uuid: UUID | str | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
     # 1. Normalize target facility UUID
     target_facility_id: UUID | None = None
-    if isinstance(facility_id, UUID):
-        target_facility_id = facility_id
-    elif isinstance(facility_id, str) and facility_id.strip():
-        try:
-            target_facility_id = UUID(facility_id.strip())
-        except (ValueError, TypeError):
-            target_facility_id = None
+    for candidate in (facility_id, facility_uuid):
+        if isinstance(candidate, UUID):
+            target_facility_id = candidate
+            break
+        elif isinstance(candidate, str) and candidate.strip():
+            try:
+                target_facility_id = UUID(candidate.strip())
+                break
+            except (ValueError, TypeError):
+                pass
 
     # 2. Scope & authorize organization and facility access
     organization = await _org(db, account)
@@ -811,6 +833,7 @@ async def _execute_relevant_patients(
 @router.get("/relevant")
 async def relevant_patients(
     facility_id: UUID | None = Query(default=None),
+    facility_uuid: UUID | None = Query(default=None),
     limit: int = Query(default=10, ge=1, le=10),
     account: Annotated[UserAccount, Depends(get_current_identity_account)] = ...,
     db: Annotated[AsyncSession, Depends(async_get_db)] = ...,
@@ -819,6 +842,7 @@ async def relevant_patients(
         db=db,
         account=account,
         facility_id=facility_id,
+        facility_uuid=facility_uuid,
         limit=limit,
     )
 
@@ -1046,3 +1070,283 @@ async def patient_timeline(
         "data": {"items": items[:limit]},
         "meta": {"count": min(len(items), limit)},
     }
+
+
+@router.get("/{patient_uuid}/encounters")
+async def list_patient_encounters(
+    patient_uuid: UUID,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    organization = await _org(db, account)
+    patient = await db.scalar(
+        select(Patient).where(
+            Patient.id == patient_uuid,
+            Patient.organization_id == organization.id,
+            Patient.is_active.is_(True),
+        )
+    )
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found.")
+
+    limit_val = limit if isinstance(limit, int) else getattr(limit, "default", 50)
+    rows = (
+        await db.execute(
+            select(Encounter, Facility, Practitioner)
+            .outerjoin(Facility, Facility.id == Encounter.facility_id)
+            .outerjoin(Practitioner, Practitioner.id == Encounter.practitioner_id)
+            .where(
+                Encounter.patient_id == patient.id,
+                Encounter.organization_id == organization.id,
+            )
+            .order_by(Encounter.started_at.desc())
+            .limit(limit_val)
+        )
+    ).all()
+
+    encounter_ids = [row[0].id for row in rows if row and getattr(row[0], "id", None)]
+
+    soaps_by_enc: dict[UUID, SoapNote] = {}
+    diagnoses_by_enc: dict[UUID, list[Diagnosis]] = {}
+    prescriptions_by_enc: dict[UUID, tuple[Prescription, list[PrescriptionItem]]] = {}
+    vitals_by_enc: dict[UUID, list[Vital]] = {}
+
+    if encounter_ids:
+        soaps = (
+            await db.scalars(
+                select(SoapNote).where(SoapNote.encounter_id.in_(encounter_ids))
+            )
+        ).all()
+        soaps_by_enc = {s.encounter_id: s for s in soaps}
+
+        diagnoses = (
+            await db.scalars(
+                select(Diagnosis)
+                .where(Diagnosis.encounter_id.in_(encounter_ids))
+                .order_by(Diagnosis.is_primary.desc())
+            )
+        ).all()
+        for d in diagnoses:
+            diagnoses_by_enc.setdefault(d.encounter_id, []).append(d)
+
+        vitals = (
+            await db.scalars(
+                select(Vital)
+                .where(Vital.encounter_id.in_(encounter_ids))
+                .order_by(Vital.recorded_at.desc())
+            )
+        ).all()
+        for v in vitals:
+            vitals_by_enc.setdefault(v.encounter_id, []).append(v)
+
+        rx_rows = (
+            await db.execute(
+                select(Prescription, PrescriptionItem)
+                .outerjoin(
+                    PrescriptionItem,
+                    PrescriptionItem.prescription_id == Prescription.id,
+                )
+                .where(Prescription.encounter_id.in_(encounter_ids))
+                .order_by(Prescription.id.desc())
+            )
+        ).all()
+        for rx, item in rx_rows:
+            if rx.encounter_id not in prescriptions_by_enc:
+                prescriptions_by_enc[rx.encounter_id] = (rx, [])
+            if item is not None:
+                prescriptions_by_enc[rx.encounter_id][1].append(item)
+
+    items = []
+    for row in rows:
+        encounter, facility, practitioner = row
+        soap = soaps_by_enc.get(encounter.id)
+        enc_diagnoses = diagnoses_by_enc.get(encounter.id, [])
+        enc_vitals = vitals_by_enc.get(encounter.id, [])
+        rx_data = prescriptions_by_enc.get(encounter.id)
+
+        rx_dict = None
+        if rx_data:
+            rx, rx_items = rx_data
+            meds = [
+                {
+                    "uuid": str(i.id),
+                    "id": str(i.id),
+                    "medicine_id": str(i.medicine_id) if getattr(i, "medicine_id", None) else None,
+                    "medicine_name": i.medicine_name,
+                    "name": i.medicine_name,
+                    "dosage": i.dosage,
+                    "dose": i.dosage,
+                    "frequency": i.frequency,
+                    "duration": i.duration,
+                    "strength": i.strength,
+                    "brand": i.brand,
+                    "route": i.route,
+                    "timing": i.timing,
+                    "instructions": i.instructions,
+                }
+                for i in rx_items
+            ]
+            rx_dict = {
+                "uuid": str(rx.id),
+                "status": rx.status,
+                "advice": rx.advice,
+                "items": meds,
+                "medications": meds,
+                "signed_at": rx.signed_at.isoformat() if rx.signed_at else None,
+            }
+
+        items.append({
+            "uuid": str(encounter.id),
+            "encounter_uuid": str(encounter.id),
+            "appointment_uuid": str(encounter.appointment_id) if encounter.appointment_id else None,
+            "queue_entry_uuid": str(encounter.queue_entry_id) if encounter.queue_entry_id else None,
+            "status": encounter.status,
+            "started_at": encounter.started_at.isoformat() if encounter.started_at else None,
+            "completed_at": encounter.completed_at.isoformat() if encounter.completed_at else None,
+            "facility": {
+                "uuid": str(facility.id),
+                "name": facility.name,
+            } if facility else None,
+            "practitioner": {
+                "uuid": str(practitioner.id),
+                "name": practitioner.person_name,
+                "specialty": practitioner.specialty,
+            } if practitioner else None,
+            "soap": {
+                "uuid": str(soap.id),
+                "status": soap.status,
+                "subjective": soap.subjective or "",
+                "objective": soap.objective or "",
+                "assessment": soap.assessment or "",
+                "plan": soap.plan or "",
+                "custom_fields": soap.custom_fields or {},
+                "signed_at": soap.signed_at.isoformat() if soap.signed_at else None,
+            } if soap else None,
+            "diagnoses": [
+                {
+                    "uuid": str(d.id),
+                    "code": d.code,
+                    "description": d.description,
+                    "is_primary": d.is_primary,
+                }
+                for d in enc_diagnoses
+            ],
+            "vitals": [
+                {
+                    "uuid": str(v.id),
+                    "name": v.name,
+                    "value": v.value,
+                    "unit": v.unit,
+                    "recorded_at": v.recorded_at.isoformat() if v.recorded_at else None,
+                }
+                for v in enc_vitals
+            ],
+            "prescription": rx_dict,
+        })
+
+    return {
+        "success": True,
+        "data": {"items": items},
+        "meta": {"count": len(items)},
+    }
+
+
+@router.get("/{patient_uuid}/prescriptions")
+async def list_patient_prescriptions(
+    patient_uuid: UUID,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    organization = await _org(db, account)
+    patient = await db.scalar(
+        select(Patient).where(
+            Patient.id == patient_uuid,
+            Patient.organization_id == organization.id,
+            Patient.is_active.is_(True),
+        )
+    )
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found.")
+
+    limit_val = limit if isinstance(limit, int) else getattr(limit, "default", 50)
+    rx_rows = (
+        await db.execute(
+            select(Prescription, Encounter, Facility, Practitioner)
+            .join(Encounter, Encounter.id == Prescription.encounter_id)
+            .outerjoin(Facility, Facility.id == Encounter.facility_id)
+            .outerjoin(Practitioner, Practitioner.id == Encounter.practitioner_id)
+            .where(
+                Encounter.patient_id == patient.id,
+                Encounter.organization_id == organization.id,
+            )
+            .order_by(
+                Prescription.signed_at.desc().nullslast(),
+                Prescription.id.desc(),
+            )
+            .limit(limit_val)
+        )
+    ).all()
+
+    rx_ids = [row[0].id for row in rx_rows if row and getattr(row[0], "id", None)]
+    items_by_rx: dict[UUID, list[PrescriptionItem]] = {}
+    if rx_ids:
+        pi_rows = (
+            await db.scalars(
+                select(PrescriptionItem).where(PrescriptionItem.prescription_id.in_(rx_ids))
+            )
+        ).all()
+        for pi in pi_rows:
+            items_by_rx.setdefault(pi.prescription_id, []).append(pi)
+
+    items = []
+    for rx, encounter, facility, practitioner in rx_rows:
+        pi_list = items_by_rx.get(rx.id, [])
+        meds = [
+            {
+                "uuid": str(i.id),
+                "id": str(i.id),
+                "medicine_id": str(i.medicine_id) if getattr(i, "medicine_id", None) else None,
+                "medicine_name": i.medicine_name,
+                "name": i.medicine_name,
+                "dosage": i.dosage,
+                "dose": i.dosage,
+                "frequency": i.frequency,
+                "duration": i.duration,
+                "strength": i.strength,
+                "brand": i.brand,
+                "route": i.route,
+                "timing": i.timing,
+                "instructions": i.instructions,
+            }
+            for i in pi_list
+        ]
+        items.append({
+            "uuid": str(rx.id),
+            "prescription_uuid": str(rx.id),
+            "encounter_uuid": str(encounter.id),
+            "appointment_uuid": str(encounter.appointment_id) if encounter.appointment_id else None,
+            "status": rx.status,
+            "advice": rx.advice,
+            "signed_at": rx.signed_at.isoformat() if rx.signed_at else None,
+            "encounter_started_at": encounter.started_at.isoformat() if encounter.started_at else None,
+            "facility": {
+                "uuid": str(facility.id),
+                "name": facility.name,
+            } if facility else None,
+            "practitioner": {
+                "uuid": str(practitioner.id),
+                "name": practitioner.person_name,
+                "specialty": practitioner.specialty,
+            } if practitioner else None,
+            "items": meds,
+            "medications": meds,
+        })
+
+    return {
+        "success": True,
+        "data": {"items": items},
+        "meta": {"count": len(items)},
+    }
+
