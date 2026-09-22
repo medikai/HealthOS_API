@@ -53,7 +53,7 @@ async def _resolve_schedule_authorization(
     target_facility_id: UUID,
     *,
     write: bool = False,
-) -> tuple[UUID, Facility, Practitioner]:
+) -> tuple[UUID, Facility, Practitioner, bool]:
     # 1. Fetch user's staff membership
     staff_member = await db.scalar(
         select(StaffMember).where(
@@ -130,7 +130,7 @@ async def _resolve_schedule_authorization(
                 detail={"code": "FORBIDDEN", "message": "User does not have access to this facility."},
             )
 
-    return organization_id, facility, practitioner
+    return organization_id, facility, practitioner, is_admin
 
 
 def _build_inherited_schedule(
@@ -216,7 +216,7 @@ async def get_practitioner_schedule(
     facility_uuid: UUID | None = None,
 ) -> dict[str, Any]:
     target_facility_id = _extract_facility_uuid(facility_uuid)
-    organization_id, facility, practitioner = await _resolve_schedule_authorization(
+    organization_id, facility, practitioner, _ = await _resolve_schedule_authorization(
         db, account, practitioner_uuid, target_facility_id, write=False
     )
 
@@ -243,6 +243,57 @@ async def get_practitioner_schedule(
     return {"success": True, "data": data, "meta": {}}
 
 
+@router.get("/scheduling/availability-permissions")
+async def availability_permissions(
+    facility_uuid: UUID,
+    practitioner_uuid: UUID,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization_id, _, practitioner, is_admin = await _resolve_schedule_authorization(
+        db, account, practitioner_uuid, facility_uuid, write=False
+    )
+    is_own_schedule = practitioner.user_account_id == account.id
+    can_manage = is_admin or is_own_schedule
+    schedule = await db.scalar(
+        select(PractitionerSchedule)
+        .where(
+            PractitionerSchedule.organization_id == organization_id,
+            PractitionerSchedule.facility_id == facility_uuid,
+            PractitionerSchedule.practitioner_id == practitioner_uuid,
+            PractitionerSchedule.is_active.is_(True),
+        )
+        .order_by(PractitionerSchedule.created_at.desc())
+    )
+    return {
+        "success": True,
+        "data": {
+            "permissions": {
+                "can_edit_facility_schedule": is_admin,
+                "can_edit_own_schedule": can_manage,
+                "can_edit_other_schedules": is_admin,
+                "can_reset_doctor_schedule": can_manage,
+                "can_force_schedule_conflict": is_admin,
+                "supports_versioning": True,
+                "supported_operations": [
+                    "availability-rules",
+                    "availability-exceptions",
+                    "reset",
+                    "conflict-detection",
+                ],
+            },
+            "current_version": str(schedule.version) if schedule else "0",
+            "effective_from": (
+                schedule.effective_from.isoformat()
+                if schedule and schedule.effective_from
+                else None
+            ),
+            "has_overrides": schedule is not None,
+        },
+        "meta": {},
+    }
+
+
 @router.put(
     "/practitioners/{practitioner_uuid}/schedule",
     response_model=PractitionerScheduleResponse,
@@ -260,9 +311,17 @@ async def update_practitioner_schedule(
     force: bool = False,
 ) -> dict[str, Any]:
     target_facility_id = _extract_facility_uuid(facility_uuid, payload.facility_uuid)
-    organization_id, facility, practitioner = await _resolve_schedule_authorization(
+    organization_id, facility, practitioner, is_admin = await _resolve_schedule_authorization(
         db, account, practitioner_uuid, target_facility_id, write=True
     )
+    if force and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "SCHEDULE_FORCE_PERMISSION_REQUIRED",
+                "message": "Administrator permission is required to force schedule conflicts.",
+            },
+        )
 
     # Lock and query existing active override
     existing = await db.scalar(
@@ -390,7 +449,7 @@ async def reset_practitioner_schedule(
     facility_uuid: UUID | None = None,
 ) -> dict[str, Any]:
     target_facility_id = _extract_facility_uuid(facility_uuid)
-    organization_id, facility, practitioner = await _resolve_schedule_authorization(
+    organization_id, facility, practitioner, _ = await _resolve_schedule_authorization(
         db, account, practitioner_uuid, target_facility_id, write=True
     )
 

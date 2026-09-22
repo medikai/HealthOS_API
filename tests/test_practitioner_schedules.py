@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from src.app.api.v1.practitioner_schedules import (
     _build_inherited_schedule,
     _format_schedule_response,
+    availability_permissions,
     get_practitioner_schedule,
     reset_practitioner_schedule,
     update_practitioner_schedule,
@@ -450,6 +451,41 @@ class PractitionerScheduleEndpointTests(unittest.IsolatedAsyncioTestCase):
         mock_db.add.assert_called_once()
         mock_audit.assert_called_once()
 
+    async def test_admin_schedule_permissions_include_override_version(self):
+        admin_staff = SimpleNamespace(
+            id=UUID("01a0a022-b2a0-7000-8000-000000000011"),
+            organization_id=self.org_id,
+            is_active=True,
+        )
+        admin_assignment = SimpleNamespace(
+            role_code="organization_admin",
+            facility_id=None,
+            is_active=True,
+        )
+        override = SimpleNamespace(
+            version=3,
+            effective_from=date(2026, 9, 22),
+        )
+        mock_db = self._make_db(
+            staff_member=admin_staff,
+            assignments=[admin_assignment],
+            practitioner=self.doctor_practitioner,
+            practitioner_override=override,
+        )
+
+        response = await availability_permissions(
+            facility_uuid=self.facility_id,
+            practitioner_uuid=self.doctor_practitioner_id,
+            account=self.admin_account,
+            db=mock_db,
+        )
+
+        data = response["data"]
+        self.assertTrue(data["permissions"]["can_edit_other_schedules"])
+        self.assertTrue(data["permissions"]["can_force_schedule_conflict"])
+        self.assertEqual(data["current_version"], "3")
+        self.assertTrue(data["has_overrides"])
+
     async def test_doctor_can_update_own_schedule(self):
         staff_member = SimpleNamespace(id=UUID("01a0a022-b2a0-7000-8000-000000000010"), organization_id=self.org_id, is_active=True)
         doctor_assignment = SimpleNamespace(id=UUID("01a0a022-b2a0-7000-8000-000000000020"), role_code="doctor", facility_id=self.facility_id, is_active=True)
@@ -487,6 +523,41 @@ class PractitionerScheduleEndpointTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(response["success"])
         self.assertEqual(response["data"]["slot_interval_minutes"], 15)
+
+    async def test_doctor_cannot_force_schedule_conflicts(self):
+        staff_member = SimpleNamespace(
+            id=UUID("01a0a022-b2a0-7000-8000-000000000010"),
+            organization_id=self.org_id,
+            is_active=True,
+        )
+        doctor_assignment = SimpleNamespace(
+            role_code="doctor",
+            facility_id=self.facility_id,
+            is_active=True,
+        )
+        mock_db = self._make_db(
+            staff_member=staff_member,
+            assignments=[doctor_assignment],
+            practitioner=self.doctor_practitioner,
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            await update_practitioner_schedule(
+                practitioner_uuid=self.doctor_practitioner_id,
+                payload=PractitionerScheduleInput(
+                    facility_uuid=self.facility_id,
+                    weekly_hours=[],
+                ),
+                account=self.doctor_account,
+                db=mock_db,
+                facility_uuid=self.facility_id,
+                force=True,
+            )
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(
+            ctx.exception.detail["code"], "SCHEDULE_FORCE_PERMISSION_REQUIRED"
+        )
 
     async def test_doctor_cannot_update_another_doctor_schedule(self):
         staff_member = SimpleNamespace(id=UUID("01a0a022-b2a0-7000-8000-000000000010"), organization_id=self.org_id, is_active=True)
