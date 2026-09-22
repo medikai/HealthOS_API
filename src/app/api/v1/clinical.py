@@ -22,6 +22,7 @@ from ...models.care import (
     SoapNote,
 )
 from ...models.identity import UserAccount
+from ...models.masters import Medicine
 from ...models.organization import Facility, Organization, StaffAssignment, StaffMember
 from ...schemas.clinical import (
     DiagnosisInput,
@@ -111,6 +112,17 @@ async def _practitioner(db: AsyncSession, account: UserAccount, encounter: Encou
     if practitioner is None:
         raise HTTPException(status_code=403, detail="A practitioner account is required for this clinical action.")
     return practitioner
+
+
+async def _validate_medicine_ids(db: AsyncSession, items: list[Any]) -> None:
+    ids = {item.medicine_id for item in items if item.medicine_id}
+    if not ids:
+        return
+    valid = set((await db.scalars(select(Medicine.id).where(
+        Medicine.id.in_(ids), Medicine.is_active.is_(True), Medicine.is_discontinued.is_(False)
+    ))).all())
+    if valid != ids:
+        raise HTTPException(status_code=422, detail="One or more selected medicines do not exist or are unavailable.")
 
 
 def _soap_item(note: SoapNote) -> dict[str, Any]:
@@ -209,6 +221,7 @@ async def create_prescription(
 ) -> dict[str, Any]:
     encounter = await _encounter(db, account, encounter_uuid)
     await _practitioner(db, account, encounter)
+    await _validate_medicine_ids(db, payload.items)
     prescription = await db.scalar(
         select(Prescription)
         .where(Prescription.encounter_id == encounter.id)
@@ -276,7 +289,7 @@ async def _prescription(db: AsyncSession, account: UserAccount, prescription_uui
 
 
 def _prescription_item(prescription: Prescription, items: list[PrescriptionItem]) -> dict[str, Any]:
-    medications = [{"uuid": str(i.id), "id": str(i.id), "medicine_name": i.medicine_name, "name": i.medicine_name, "dosage": i.dosage, "dose": i.dosage, "frequency": i.frequency, "duration": i.duration, "strength": i.strength, "brand": i.brand, "route": i.route, "timing": i.timing, "instructions": i.instructions} for i in items]
+    medications = [{"uuid": str(i.id), "id": str(i.id), "medicine_id": str(i.medicine_id) if getattr(i, "medicine_id", None) else None, "medicine_name": i.medicine_name, "name": i.medicine_name, "dosage": i.dosage, "dose": i.dosage, "frequency": i.frequency, "duration": i.duration, "strength": i.strength, "brand": i.brand, "route": i.route, "timing": i.timing, "instructions": i.instructions} for i in items]
     return {"uuid": str(prescription.id), "encounter_uuid": str(prescription.encounter_id), "status": prescription.status, "advice": prescription.advice, "items": medications, "medications": medications, "signed_at": prescription.signed_at.isoformat() if prescription.signed_at else None}
 
 
@@ -322,6 +335,7 @@ async def update_prescription(
 ) -> dict[str, Any]:
     prescription, encounter = await _prescription(db, account, prescription_uuid)
     await _practitioner(db, account, encounter)
+    await _validate_medicine_ids(db, payload.items)
     was_signed = prescription.status == "signed"
     prescription.advice = payload.advice
     await db.execute(

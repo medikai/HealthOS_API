@@ -42,6 +42,14 @@ class Facility(Base):
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
     name: Mapped[str] = mapped_column(String(255))
     code: Mapped[str] = mapped_column(String(64), index=True)
+    classification: Mapped[str | None] = mapped_column(String(128), default=None)
+    street_address: Mapped[str | None] = mapped_column(Text, default=None)
+    country_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.country.id"), index=True, default=None)
+    state_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.state.id"), index=True, default=None)
+    district_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.district.id"), index=True, default=None)
+    city_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.city.id"), index=True, default=None)
+    postal_code: Mapped[str | None] = mapped_column(String(32), default=None)
+    phone: Mapped[str | None] = mapped_column(String(32), default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 
@@ -161,4 +169,3 @@ class StaffInvitation(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-

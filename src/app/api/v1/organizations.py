@@ -24,9 +24,19 @@ async def create_organization(
         account,
         payload.name,
         payload.code,
-        payload.specialty_id,
-        payload.medical_council_id,
-        payload.medical_council_reg_no,
+        specialty_id=payload.specialty_id,
+        medical_council_id=payload.medical_council_id,
+        medical_council_reg_no=payload.medical_council_reg_no,
+        clinic_name=payload.clinic_name,
+        classification=payload.classification,
+        street_address=payload.street_address,
+        country_id=payload.country_id,
+        state_id=payload.state_id,
+        district_id=payload.district_id,
+        city_id=payload.city_id,
+        postal_code=payload.postal_code,
+        phone=payload.phone,
+        timezone=payload.timezone,
     )
     return {
         "success": True,
@@ -70,7 +80,12 @@ async def create_facility(
     account: Annotated[UserAccount, Depends(get_current_identity_account)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
-    facility = await access_service.create_facility(db, account, organization_id, payload.name, payload.code)
+    facility = await access_service.create_facility(
+        db, account, organization_id, payload.name, payload.code,
+        classification=payload.classification, street_address=payload.street_address,
+        country_id=payload.country_id, state_id=payload.state_id, district_id=payload.district_id, city_id=payload.city_id,
+        postal_code=payload.postal_code, phone=payload.phone, timezone=payload.timezone,
+    )
     return {"success": True, "data": {"id": str(facility.id), "organization_id": str(organization_id), "name": facility.name, "code": facility.code}, "meta": {}}
 
 

@@ -8,7 +8,7 @@ from ...core.availability import rules_from_facility_schedule
 from ...core.config import settings
 from ...domains.auth.logto import logto_oidc_client
 from ...models.identity import UserAccount
-from ...models.masters import MedicalCouncil, Specialty
+from ...models.masters import City, Country, District, MedicalCouncil, Specialty, State
 from ...models.organization import (
     Department,
     Facility,
@@ -23,12 +23,28 @@ VALID_ROLE_CODES = {"organization_admin", "practitioner", "nurse", "receptionist
 
 
 class AccessService:
-    async def create_facility(self, db: AsyncSession, actor: UserAccount, organization_id: uuid.UUID, name: str, code: str) -> Facility:
+    async def create_facility(
+        self, db: AsyncSession, actor: UserAccount, organization_id: uuid.UUID,
+        name: str, code: str, *, classification: str | None = None,
+        street_address: str | None = None, country_id: uuid.UUID | None = None,
+        state_id: uuid.UUID | None = None, district_id: uuid.UUID | None = None,
+        city_id: uuid.UUID | None = None,
+        postal_code: str | None = None, phone: str | None = None,
+        timezone: str = "Asia/Kolkata",
+    ) -> Facility:
         await self._require_admin(db, actor.id, organization_id)
         if await db.scalar(select(Facility).where(Facility.organization_id == organization_id, Facility.code == code)):
             raise HTTPException(status_code=409, detail="Facility code already exists in this organization.")
-        facility = Facility(organization_id=organization_id, name=name, code=code)
+        await self._validate_location(db, country_id, state_id, district_id, city_id)
+        facility = Facility(
+            organization_id=organization_id, name=name, code=code,
+            classification=classification, street_address=street_address,
+            country_id=country_id, state_id=state_id, district_id=district_id, city_id=city_id,
+            postal_code=postal_code, phone=phone,
+        )
         db.add(facility)
+        await db.flush()
+        db.add(FacilitySchedule(facility_id=facility.id, timezone=timezone))
         await db.commit()
         await db.refresh(facility)
         return facility
@@ -58,6 +74,16 @@ class AccessService:
         specialty_id: uuid.UUID | None = None,
         medical_council_id: uuid.UUID | None = None,
         medical_council_reg_no: str | None = None,
+        clinic_name: str | None = None,
+        classification: str | None = None,
+        street_address: str | None = None,
+        country_id: uuid.UUID | None = None,
+        state_id: uuid.UUID | None = None,
+        district_id: uuid.UUID | None = None,
+        city_id: uuid.UUID | None = None,
+        postal_code: str | None = None,
+        phone: str | None = None,
+        timezone: str = "Asia/Kolkata",
     ) -> Organization:
         if await db.scalar(select(Organization).where((Organization.name == name) | (Organization.code == code))):
             raise HTTPException(status_code=409, detail="Organization name or code already exists.")
@@ -69,13 +95,19 @@ class AccessService:
             logto_organization_id = await logto_oidc_client.create_management_organization(name)
             await logto_oidc_client.add_management_organization_member(logto_organization_id, account.logto_user_id)
             await logto_oidc_client.assign_management_organization_role(logto_organization_id, account.logto_user_id, role_id)
+        await self._validate_location(db, country_id, state_id, district_id, city_id)
         organization = Organization(name=name, code=code, logto_organization_id=logto_organization_id)
         db.add(organization)
         await db.flush()
-        facility = Facility(organization_id=organization.id, name=f"{name} Main Clinic", code="MAIN", is_active=True)
+        facility = Facility(
+            organization_id=organization.id, name=clinic_name or f"{name} Main Clinic", code="MAIN",
+            classification=classification, street_address=street_address,
+            country_id=country_id, state_id=state_id, district_id=district_id, city_id=city_id,
+            postal_code=postal_code, phone=phone, is_active=True,
+        )
         db.add(facility)
         await db.flush()
-        schedule = FacilitySchedule(facility_id=facility.id)
+        schedule = FacilitySchedule(facility_id=facility.id, timezone=timezone)
         db.add(schedule)
         member = StaffMember(organization_id=organization.id, user_account_id=account.id)
         db.add(member)
@@ -177,6 +209,37 @@ class AccessService:
     def _validate_role(role_code: str) -> None:
         if role_code not in VALID_ROLE_CODES:
             raise HTTPException(status_code=422, detail=f"Unsupported role. Allowed roles: {', '.join(sorted(VALID_ROLE_CODES))}.")
+
+    @staticmethod
+    async def _validate_location(
+        db: AsyncSession,
+        country_id: uuid.UUID | None,
+        state_id: uuid.UUID | None,
+        district_id: uuid.UUID | None,
+        city_id: uuid.UUID | None,
+    ) -> None:
+        if state_id and not country_id:
+            raise HTTPException(status_code=422, detail="country_id is required with state_id.")
+        if city_id and not state_id:
+            raise HTTPException(status_code=422, detail="state_id is required with city_id.")
+        if district_id and not state_id:
+            raise HTTPException(status_code=422, detail="state_id is required with district_id.")
+        if country_id:
+            country = await db.get(Country, country_id)
+            if country is None or not country.is_active:
+                raise HTTPException(status_code=422, detail="Country does not exist or is inactive.")
+        if state_id:
+            state_row = await db.get(State, state_id)
+            if state_row is None or not state_row.is_active or state_row.country_id != country_id:
+                raise HTTPException(status_code=422, detail="State does not belong to the selected country.")
+        if district_id:
+            district = await db.get(District, district_id)
+            if district is None or not district.is_active or district.state_id != state_id:
+                raise HTTPException(status_code=422, detail="District does not belong to the selected state.")
+        if city_id:
+            city = await db.get(City, city_id)
+            if city is None or not city.is_active or city.state_id != state_id or city.district_id != district_id:
+                raise HTTPException(status_code=422, detail="City does not belong to the selected district.")
 
 
 access_service = AccessService()
