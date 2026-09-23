@@ -131,6 +131,7 @@ cython_debug/
 .DS_Store
 
 .ruff_cache
+/data/lgd/
 
 .idea
 
@@ -151,6 +152,7 @@ docs/*
 !docs/*.pdf
 !docs/healthos-business-reporting-contract.md
 !docs/healthos-upgrade-progress.md
+!docs/india-geography-etl.md
 AGENTS.md
 !AGENTS.md
 backup.dump

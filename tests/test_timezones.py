@@ -10,10 +10,19 @@ from src.app.core.timezones import (
     timezone,
     to_timezone,
 )
+from src.app.schemas.access import FacilityCreate, OrganizationCreate
 from src.app.schemas.facility_schedule import FacilityScheduleInput
 
 
 class TimezoneTests(unittest.TestCase):
+    def test_organization_ignores_legacy_timezone_but_facility_validates_it(self) -> None:
+        organization = OrganizationCreate(name="NS Clinic", code="ns_clinic", timezone="Asia/Kolkata (IST • UTC+5:30)")
+        self.assertNotIn("timezone", organization.model_dump())
+        with self.assertRaises(ValidationError):
+            OrganizationCreate(name="NS Clinic", code="ns_clinic", unknown="value")
+        with self.assertRaises(ValidationError):
+            FacilityCreate(name="NS Clinic", code="ns_clinic", timezone="Asia/Kolkata (IST • UTC+5:30)")
+
     def test_clinic_slots_and_appointment_inputs_share_one_instant(self) -> None:
         tz = timezone("Asia/Kolkata")
         slot_start = local_datetime(date(2026, 9, 16), time(9, 30), tz)
