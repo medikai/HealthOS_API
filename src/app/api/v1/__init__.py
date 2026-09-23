@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from .auth import router as auth_router
 from .bootstrap import router as bootstrap_router
 from .billing import router as billing_router
+from .earnings import router as earnings_router
 from .calendar import router as calendar_router
 from .clinical import router as clinical_router
 from .dashboard import router as dashboard_router
@@ -25,6 +26,7 @@ from .staff import router as staff_router
 router = APIRouter(prefix="/v1")
 router.include_router(health_router)
 router.include_router(billing_router)
+router.include_router(earnings_router)
 router.include_router(auth_router)
 router.include_router(organizations_router)
 router.include_router(bootstrap_router)

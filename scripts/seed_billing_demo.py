@@ -1,16 +1,16 @@
-"""Explicit development seed for consultation fees and signed SOAP encounters."""
+"""Explicit development seed for consultation fees, invoices, and payments."""
 
 import argparse
 import asyncio
-from datetime import date
+from datetime import date, timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 
 from src.app.api.v1.billing import _resolve_fee
 from src.app.core.db.database import local_session
-from src.app.models.billing import ConsultationFee, Invoice
-from src.app.models.care import Encounter, Practitioner, SoapNote
+from src.app.models.billing import ConsultationFee, Invoice, Payment
+from src.app.models.care import Encounter, Practitioner
 from src.app.models.identity import UserAccount
 from src.app.models.organization import Facility
 
@@ -25,6 +25,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--facility-minor", type=int, default=50_000)
     parser.add_argument("--specialty-minor", type=int, default=70_000)
     parser.add_argument("--practitioner-minor", type=int, default=90_000)
+    parser.add_argument("--include-in-progress", action="store_true")
     parser.add_argument("--apply", action="store_true")
     return parser.parse_args()
 
@@ -66,15 +67,10 @@ async def _seed(args: argparse.Namespace) -> None:
             planned.append(
                 ("practitioner", practitioner.id, None, args.practitioner_minor)
             )
-        if not args.apply:
-            print(f"DRY RUN: {len(planned)} fee rows; signed SOAP encounters unchanged")
-            print("Re-run with --apply to insert missing fees and encounter invoices.")
-            return
-
         created_fees = 0
         for scope_type, practitioner_id, specialty_id, amount_minor in planned:
             existing = await db.scalar(
-                select(ConsultationFee.id).where(
+                select(ConsultationFee).where(
                     ConsultationFee.facility_id == facility.id,
                     ConsultationFee.scope_type == scope_type,
                     ConsultationFee.practitioner_id == practitioner_id,
@@ -83,6 +79,29 @@ async def _seed(args: argparse.Namespace) -> None:
                 )
             )
             if existing:
+                if args.effective_from < existing.effective_from and not await db.scalar(
+                    select(ConsultationFee.id).where(
+                        ConsultationFee.facility_id == facility.id,
+                        ConsultationFee.scope_type == scope_type,
+                        ConsultationFee.practitioner_id == practitioner_id,
+                        ConsultationFee.specialty_id == specialty_id,
+                        ConsultationFee.effective_from == args.effective_from,
+                    )
+                ):
+                    db.add(ConsultationFee(
+                        organization_id=facility.organization_id,
+                        facility_id=facility.id,
+                        scope_type=scope_type,
+                        practitioner_id=practitioner_id,
+                        specialty_id=specialty_id,
+                        amount_minor=existing.amount_minor,
+                        currency=existing.currency,
+                        effective_from=args.effective_from,
+                        effective_to=existing.effective_from - timedelta(days=1),
+                        is_active=False,
+                        created_by_user_id=actor.id,
+                    ))
+                    created_fees += 1
                 continue
             db.add(
                 ConsultationFee(
@@ -103,43 +122,57 @@ async def _seed(args: argparse.Namespace) -> None:
         encounters = (
             await db.scalars(
                 select(Encounter)
-                .join(
-                    SoapNote,
-                    and_(
-                        SoapNote.encounter_id == Encounter.id,
-                        SoapNote.status == "signed",
-                    ),
-                )
                 .outerjoin(Invoice, Invoice.encounter_id == Encounter.id)
                 .where(
                     Encounter.organization_id == facility.organization_id,
                     Encounter.facility_id == facility.id,
-                    Encounter.status == "completed",
+                    Encounter.status.in_(
+                        ("completed", "in_progress")
+                        if args.include_in_progress else ("completed",)
+                    ),
                     Invoice.id.is_(None),
                 )
             )
         ).all()
-        created_invoices = 0
+        created_invoices = created_payments = 0
         for encounter in encounters:
             fee = await _resolve_fee(db, encounter)
             if fee is None:
                 continue
-            db.add(
-                Invoice(
+            invoice = Invoice(
+                organization_id=encounter.organization_id,
+                facility_id=encounter.facility_id,
+                encounter_id=encounter.id,
+                patient_id=encounter.patient_id,
+                practitioner_id=encounter.practitioner_id,
+                consultation_fee_id=fee.id,
+                amount_minor=fee.amount_minor,
+                currency=fee.currency,
+                created_by_user_id=actor.id,
+                issued_at=encounter.completed_at or encounter.started_at,
+            )
+            db.add(invoice)
+            await db.flush()
+            created_invoices += 1
+            if fee.amount_minor > 0:
+                db.add(Payment(
                     organization_id=encounter.organization_id,
                     facility_id=encounter.facility_id,
-                    encounter_id=encounter.id,
-                    patient_id=encounter.patient_id,
-                    practitioner_id=encounter.practitioner_id,
-                    consultation_fee_id=fee.id,
+                    invoice_id=invoice.id,
                     amount_minor=fee.amount_minor,
                     currency=fee.currency,
+                    idempotency_key=f"demo-encounter-{encounter.id}",
+                    provenance="synthetic_demo",
                     created_by_user_id=actor.id,
-                )
-            )
-            created_invoices += 1
-        await db.commit()
-        print(f"Created {created_fees} fee rows and {created_invoices} invoices.")
+                    received_at=encounter.completed_at or encounter.started_at,
+                ))
+                invoice.status = "paid"
+                created_payments += 1
+        if args.apply:
+            await db.commit()
+        else:
+            await db.rollback()
+        print(f"{'Created' if args.apply else 'Would create'} {created_fees} fees, {created_invoices} invoices, {created_payments} payments.")
 
 
 if __name__ == "__main__":

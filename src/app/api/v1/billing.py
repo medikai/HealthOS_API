@@ -1,18 +1,25 @@
-from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, func, or_, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, case, cast, func, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.types import String
 
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
-from ...core.timezones import DEFAULT_TIMEZONE, timezone, to_timezone
+from ...core.timezones import (
+    DEFAULT_TIMEZONE,
+    local_datetime,
+    timezone,
+    to_timezone,
+    to_utc,
+)
 from ...domains.governance.audit import record_audit
 from ...models.billing import ConsultationFee, Invoice, Payment, Refund
 from ...models.care import Encounter, Practitioner
-from ...models.identity import UserAccount
+from ...models.identity import Patient, Person, UserAccount
 from ...models.masters import Specialty
 from ...models.organization import (
     Facility,
@@ -22,9 +29,76 @@ from ...models.organization import (
 )
 from ...schemas.billing import ConsultationFeeInput, PaymentInput, RefundInput
 from .bootstrap import ADMIN_ROLES
+from .patients import _escape_like
 
 router = APIRouter(tags=["billing"])
 BILLING_ROLES = {*ADMIN_ROLES, "billing_staff"}
+
+
+async def _billing_read_context(db: AsyncSession, account: UserAccount, facility_uuid: UUID):
+    staff = await db.scalar(select(StaffMember).join(
+        Facility, Facility.organization_id == StaffMember.organization_id).where(
+        Facility.id == facility_uuid, StaffMember.user_account_id == account.id,
+        StaffMember.is_active.is_(True)))
+    if staff is None:
+        raise _error(403, "BILLING_ACCESS_REQUIRED", "Billing access is required.")
+    permitted = await db.scalar(select(StaffAssignment.id).where(
+        StaffAssignment.staff_member_id == staff.id,
+        StaffAssignment.is_active.is_(True),
+        StaffAssignment.role_code.in_(BILLING_ROLES),
+        or_(StaffAssignment.facility_id == facility_uuid,
+            and_(StaffAssignment.facility_id.is_(None), StaffAssignment.role_code.in_(ADMIN_ROLES))),
+    ))
+    if permitted is None:
+        raise _error(403, "BILLING_ACCESS_REQUIRED", "Billing access is required.")
+    row = (await db.execute(select(Facility, FacilitySchedule.timezone)
+        .outerjoin(FacilitySchedule, FacilitySchedule.facility_id == Facility.id)
+        .where(Facility.id == facility_uuid, Facility.organization_id == staff.organization_id,
+               Facility.is_active.is_(True)))).first()
+    if row is None:
+        raise _error(404, "FACILITY_NOT_FOUND", "Facility not found or inactive.")
+    return staff.organization_id, row[0], row[1] or DEFAULT_TIMEZONE
+
+
+def _balance_columns(as_of: datetime | None = None):
+    paid = select(func.coalesce(func.sum(Payment.amount_minor), 0)).where(
+        Payment.invoice_id == Invoice.id, Payment.status == "captured"
+    )
+    refunded = select(func.coalesce(func.sum(Refund.amount_minor), 0)).where(
+        Refund.invoice_id == Invoice.id, Refund.status == "completed"
+    )
+    if as_of is not None:
+        paid = paid.where(Payment.received_at <= as_of)
+        refunded = refunded.where(Refund.refunded_at <= as_of)
+    paid = paid.correlate(Invoice).scalar_subquery()
+    refunded = refunded.correlate(Invoice).scalar_subquery()
+    return paid, refunded, func.greatest(Invoice.amount_minor - paid + refunded, 0)
+
+
+def _invoice_demo_provenance():
+    seeded = select(Payment.id).where(
+        Payment.invoice_id == Invoice.id,
+        Payment.idempotency_key == func.concat("demo-encounter-", cast(Invoice.encounter_id, String)),
+    ).correlate(Invoice).exists()
+    return case((seeded, "synthetic_demo"), else_="unknown")
+
+
+def _local_bounds(date_from: date | None, date_to: date | None, timezone_name: str):
+    if date_from and date_to and date_from > date_to:
+        raise _error(422, "INVALID_DATE_RANGE", "date_from must be on or before date_to.")
+    tz = timezone(timezone_name)
+    return (to_utc(local_datetime(date_from, time.min, tz), tz) if date_from else None,
+            to_utc(local_datetime(date_to + timedelta(days=1), time.min, tz), tz) if date_to else None)
+
+
+def _billing_patient_filter(query: str | None):
+    if query is None:
+        return None
+    if not query.strip():
+        raise _error(422, "INVALID_PATIENT_QUERY", "patient_query cannot be blank.")
+    value = f"%{_escape_like(query.strip())}%"
+    return or_(Patient.mrn.ilike(value, escape="\\"), Person.first_name.ilike(value, escape="\\"),
+               Person.last_name.ilike(value, escape="\\"))
 
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
@@ -190,6 +264,161 @@ def _invoice_item(invoice: Invoice, paid: int = 0, refunded: int = 0) -> dict[st
         "net_collected_minor": paid - refunded,
         "balance_minor": max(invoice.amount_minor - (paid - refunded), 0),
     }
+
+
+@router.get("/billing/invoices")
+async def list_invoices(
+    facility_uuid: UUID,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    date_from: date | None = None,
+    date_to: date | None = None,
+    patient_query: str | None = Query(default=None, max_length=120),
+    status: Literal["issued", "partially_paid", "paid", "voided"] | None = None,
+    outstanding_only: bool = False,
+    sort_by: Literal["issued_at", "amount_minor", "balance_minor", "status", "patient_name"] = "issued_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> dict[str, Any]:
+    organization_id, facility, timezone_name = await _billing_read_context(db, account, facility_uuid)
+    start, end = _local_bounds(date_from, date_to, timezone_name)
+    patient_filter = _billing_patient_filter(patient_query)
+    paid, refunded, balance = _balance_columns()
+    filters = [Invoice.organization_id == organization_id, Invoice.facility_id == facility.id]
+    if start is not None:
+        filters.append(Invoice.issued_at >= start)
+    if end is not None:
+        filters.append(Invoice.issued_at < end)
+    if status:
+        filters.append(Invoice.status == status)
+    if outstanding_only:
+        filters.extend((Invoice.status != "voided", balance > 0))
+    if patient_filter is not None:
+        filters.append(patient_filter)
+    query = (select(Invoice, Patient, Person, paid.label("paid"), refunded.label("refunded"),
+                    balance.label("balance"), _invoice_demo_provenance().label("demo_provenance"))
+             .join(Patient, and_(Patient.id == Invoice.patient_id, Patient.organization_id == Invoice.organization_id))
+             .join(Person, and_(Person.id == Patient.person_id, Person.organization_id == Invoice.organization_id))
+             .where(*filters))
+    sort = {"issued_at": Invoice.issued_at, "amount_minor": Invoice.amount_minor,
+            "balance_minor": balance, "status": Invoice.status,
+            "patient_name": func.lower(Person.first_name + " " + func.coalesce(Person.last_name, ""))}[sort_by]
+    rows = (await db.execute(query.order_by(sort.asc() if sort_order == "asc" else sort.desc(), Invoice.id.desc())
+                             .offset((page - 1) * page_size).limit(page_size))).all()
+    count_query = select(func.count()).select_from(Invoice)
+    if patient_filter is not None:
+        count_query = count_query.join(Patient, and_(Patient.id == Invoice.patient_id, Patient.organization_id == Invoice.organization_id)).join(
+            Person, and_(Person.id == Patient.person_id, Person.organization_id == Invoice.organization_id))
+    total = int(await db.scalar(count_query.where(*filters)) or 0)
+    items = []
+    for invoice, patient, person, paid_minor, refunded_minor, balance_minor, provenance in rows:
+        item = _invoice_item(invoice, int(paid_minor), int(refunded_minor))
+        item.update({"patient": {"uuid": str(patient.id), "display_name": f"{person.first_name} {person.last_name or ''}".strip(), "mrn": patient.mrn},
+                     "balance_minor": int(balance_minor), "invoice_number": None, "due_date": None,
+                     "demo_provenance": provenance})
+        items.append(item)
+    return {"success": True, "data": {"timezone": timezone_name, "items": items},
+            "meta": {"page": page, "page_size": page_size, "total": total,
+                     "total_pages": (total + page_size - 1) // page_size}}
+
+
+@router.get("/billing/invoices/{invoice_uuid}")
+async def billing_invoice_detail(
+    invoice_uuid: UUID,
+    facility_uuid: UUID,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization_id, facility, _ = await _billing_read_context(db, account, facility_uuid)
+    row = (await db.execute(select(Invoice, Patient, Person)
+        .join(Patient, and_(Patient.id == Invoice.patient_id, Patient.organization_id == Invoice.organization_id))
+        .join(Person, and_(Person.id == Patient.person_id, Person.organization_id == Invoice.organization_id))
+        .where(Invoice.id == invoice_uuid, Invoice.organization_id == organization_id,
+               Invoice.facility_id == facility.id))).first()
+    if row is None:
+        raise _error(404, "INVOICE_NOT_FOUND", "Invoice not found.")
+    invoice, patient, person = row
+    paid, refunded = await _invoice_totals(db, invoice.id)
+    item = _invoice_item(invoice, paid, refunded)
+    provenance = await db.scalar(select(_invoice_demo_provenance()).where(Invoice.id == invoice.id))
+    item.update({"patient": {"uuid": str(patient.id), "display_name": f"{person.first_name} {person.last_name or ''}".strip(), "mrn": patient.mrn},
+                 "invoice_number": None, "due_date": None, "demo_provenance": provenance})
+    return {"success": True, "data": item, "meta": {}}
+
+
+@router.get("/billing/outstanding")
+async def outstanding_snapshot(
+    facility_uuid: UUID,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization_id, facility, timezone_name = await _billing_read_context(db, account, facility_uuid)
+    as_of = datetime.now(UTC)
+    _, _, balance = _balance_columns(as_of)
+    balances = (select(Invoice.currency.label("currency"), balance.label("balance"))
+                .where(Invoice.organization_id == organization_id, Invoice.facility_id == facility.id,
+                       Invoice.status != "voided", Invoice.issued_at <= as_of).subquery())
+    rows = (await db.execute(select(balances.c.currency, func.sum(balances.c.balance))
+                             .group_by(balances.c.currency))).all()
+    return {"success": True, "data": {"as_of_utc": as_of.isoformat(),
+            "timezone": timezone_name, "amount_unit": "minor",
+            "balances": [{"currency": currency, "amount_minor": int(amount or 0)} for currency, amount in rows],
+            "historical_available": False}, "meta": {}}
+
+
+@router.get("/billing/transactions")
+async def list_billing_transactions(
+    facility_uuid: UUID,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    date_from: date | None = None,
+    date_to: date | None = None,
+    patient_query: str | None = Query(default=None, max_length=120),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> dict[str, Any]:
+    organization_id, facility, timezone_name = await _billing_read_context(db, account, facility_uuid)
+    start, end = _local_bounds(date_from, date_to, timezone_name)
+    patient_filter = _billing_patient_filter(patient_query)
+    def transaction_query(model, kind, instant, state, sign):
+        filters = [model.organization_id == organization_id, model.facility_id == facility.id,
+                   model.status == state]
+        if start is not None:
+            filters.append(instant >= start)
+        if end is not None:
+            filters.append(instant < end)
+        if patient_filter is not None:
+            filters.append(patient_filter)
+        return (select(model.id.label("uuid"), model.invoice_id.label("invoice_uuid"),
+                       Invoice.patient_id.label("patient_uuid"),
+                       (model.amount_minor * sign).label("amount_minor"), model.currency.label("currency"),
+                       instant.label("occurred_at"), literal(kind).label("kind"),
+                       model.idempotency_key.label("reference"))
+                .join(Invoice, and_(Invoice.id == model.invoice_id,
+                                    Invoice.organization_id == model.organization_id,
+                                    Invoice.facility_id == model.facility_id))
+                .join(Patient, and_(Patient.id == Invoice.patient_id, Patient.organization_id == Invoice.organization_id))
+                .join(Person, and_(Person.id == Patient.person_id, Person.organization_id == Invoice.organization_id))
+                .where(*filters))
+    transactions = union_all(transaction_query(Payment, "payment", Payment.received_at, "captured", 1),
+                             transaction_query(Refund, "refund", Refund.refunded_at, "completed", -1)).subquery()
+    totals = (await db.execute(select(transactions.c.currency, transactions.c.kind,
+                                      func.sum(transactions.c.amount_minor))
+                               .group_by(transactions.c.currency, transactions.c.kind))).all()
+    total = int(await db.scalar(select(func.count()).select_from(transactions)) or 0)
+    rows = (await db.execute(select(transactions).order_by(transactions.c.occurred_at.desc(), transactions.c.uuid.desc())
+                             .offset((page - 1) * page_size).limit(page_size))).mappings().all()
+    return {"success": True, "data": {"timezone": timezone_name,
+            "method_available": False,
+            "totals": [{"currency": currency, "kind": kind, "amount_minor": int(amount or 0)}
+                       for currency, kind, amount in totals],
+            "items": [{**{key: str(value) if isinstance(value, UUID) else value.isoformat() if isinstance(value, datetime) else value
+                           for key, value in row.items()},
+                       "method": None, "demo_provenance": "synthetic_demo" if row["reference"].startswith("demo-encounter-") else "unknown"}
+                      for row in rows]},
+            "meta": {"page": page, "page_size": page_size, "total": total,
+                     "total_pages": (total + page_size - 1) // page_size}}
 
 
 @router.get("/facilities/{facility_uuid}/consultation-fees")
@@ -478,9 +707,13 @@ async def create_payment(
         idempotency_key=payload.idempotency_key,
         received_at=payload.received_at or datetime.now(UTC),
         created_by_user_id=account.id,
+        provenance="synthetic_demo" if payload.idempotency_key.startswith("demo-encounter-") else "recorded",
     )
     db.add(payment)
     await db.flush()
+    from .earnings import record_earning_event
+    await record_earning_event(db, payment, "payment", payment.id,
+                               payment.amount_minor, payment.received_at)
     await _refresh_invoice_status(db, invoice)
     await record_audit(
         db,
@@ -575,6 +808,9 @@ async def create_refund(
     )
     db.add(refund)
     await db.flush()
+    from .earnings import record_earning_event
+    await record_earning_event(db, payment, "refund", refund.id,
+                               refund.amount_minor, refund.refunded_at)
     invoice = await db.scalar(
         select(Invoice).where(Invoice.id == payment.invoice_id).with_for_update()
     )
@@ -682,6 +918,9 @@ async def void_payment(
     if payment.status != "voided":
         payment.status, payment.voided_at = "voided", datetime.now(UTC)
         await db.flush()
+        from .earnings import record_earning_event
+        await record_earning_event(db, payment, "payment_void", payment.id,
+                                   payment.amount_minor, payment.voided_at)
         if invoice:
             await _refresh_invoice_status(db, invoice)
         await record_audit(
@@ -722,6 +961,10 @@ async def void_refund(
     if refund.status != "voided":
         refund.status, refund.voided_at = "voided", datetime.now(UTC)
         await db.flush()
+        payment = await db.get(Payment, refund.payment_id)
+        from .earnings import record_earning_event
+        await record_earning_event(db, payment, "refund_void", refund.id,
+                                   refund.amount_minor, refund.voided_at)
         if invoice:
             await _refresh_invoice_status(db, invoice)
         await record_audit(

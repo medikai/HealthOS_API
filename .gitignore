@@ -149,7 +149,8 @@ docs/*
 !docs/API_STATUS.md
 !docs/*.json
 !docs/*.pdf
+!docs/healthos-business-reporting-contract.md
+!docs/healthos-upgrade-progress.md
 AGENTS.md
+!AGENTS.md
 backup.dump
-
-

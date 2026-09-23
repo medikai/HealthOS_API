@@ -1,5 +1,5 @@
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,8 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
-from ...core.timezones import DEFAULT_TIMEZONE, local_datetime, timezone, to_utc
-from ...models.billing import ConsultationFee, Invoice, Payment, Refund
+from ...core.timezones import (
+    DEFAULT_TIMEZONE,
+    local_datetime,
+    timezone,
+    to_timezone,
+    to_utc,
+)
+from ...models.billing import (
+    CompensationPolicy,
+    ConsultationFee,
+    Invoice,
+    Payment,
+    Refund,
+)
 from ...models.care import Appointment, Encounter, Practitioner
 from ...models.identity import Patient, Person, UserAccount
 from ...models.organization import (
@@ -19,6 +31,7 @@ from ...models.organization import (
     StaffAssignment,
     StaffMember,
 )
+from .billing import _balance_columns, outstanding_snapshot
 from .bootstrap import ADMIN_ROLES
 from .patients import _escape_like
 
@@ -37,14 +50,18 @@ async def _report_context(
 ) -> tuple[Organization, Facility, str]:
     organization = await db.scalar(
         select(Organization)
+        .join(Facility, Facility.organization_id == Organization.id)
         .join(StaffMember, StaffMember.organization_id == Organization.id)
         .join(StaffAssignment, StaffAssignment.staff_member_id == StaffMember.id)
         .where(
             StaffMember.user_account_id == account.id,
             StaffMember.is_active.is_(True),
             Organization.is_active.is_(True),
+            Facility.id == facility_uuid,
+            Facility.is_active.is_(True),
             StaffAssignment.is_active.is_(True),
             StaffAssignment.role_code.in_(ADMIN_ROLES),
+            or_(StaffAssignment.facility_id == facility_uuid, StaffAssignment.facility_id.is_(None)),
         )
     )
     if organization is None:
@@ -167,6 +184,9 @@ async def visits_report(
     patient_query: str | None = Query(default=None, min_length=1, max_length=120),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
+    sort_by: Literal["visit_started_at", "completed_at", "patient_name", "practitioner_name", "status"] = "visit_started_at",
+    sort_order: Literal["asc", "desc"] = "desc",
+    include_daily: bool = False,
 ) -> dict[str, Any]:
     if date_from > date_to:
         raise _error(
@@ -227,6 +247,7 @@ async def visits_report(
         func.count(func.distinct(Encounter.patient_id))
         .filter(Encounter.status == "completed")
         .label("unique_visited_patients"),
+        func.count(func.distinct(Encounter.patient_id)).label("unique_patients_all_visits"),
     )
     appointment_metrics_query = select(
         func.count(Appointment.id).label("scheduled_appointments"),
@@ -434,6 +455,13 @@ async def visits_report(
     )
 
     total = int(await db.scalar(total_query.where(*encounter_filters)) or 0)
+    sort_expression = {
+        "visit_started_at": Encounter.started_at,
+        "completed_at": Encounter.completed_at,
+        "patient_name": func.lower(Person.first_name + " " + func.coalesce(Person.last_name, "")),
+        "practitioner_name": func.lower(Practitioner.person_name),
+        "status": Encounter.status,
+    }[sort_by]
     rows = (
         await db.execute(
             select(Encounter, Patient, Person, Practitioner, Appointment)
@@ -466,7 +494,10 @@ async def visits_report(
                 ),
             )
             .where(*encounter_filters)
-            .order_by(Encounter.started_at.desc(), Encounter.id.desc())
+            .order_by(
+                sort_expression.asc().nulls_last() if sort_order == "asc" else sort_expression.desc().nulls_last(),
+                Encounter.id.desc(),
+            )
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -518,6 +549,16 @@ async def visits_report(
         for encounter, patient, person, practitioner, appointment in rows
     ]
     total_pages = (total + page_size - 1) // page_size
+    daily = None
+    if include_daily:
+        aggregate = await _weekly_metrics(
+            db, organization.id, facility.id, start_utc, end_utc, timezone_name,
+            practitioner_uuid, patient_filter, fallback_currency, breakdown=True,
+        )
+        daily = []
+        for offset in range((date_to - date_from).days + 1):
+            day = date_from + timedelta(days=offset)
+            daily.append({"date": day.isoformat(), "metrics": aggregate["days"].get(day, _empty_daily_metrics(fallback_currency))})
     return {
         "success": True,
         "data": {
@@ -539,6 +580,7 @@ async def visits_report(
                 "unique_visited_patients": int(
                     encounter_metrics.unique_visited_patients or 0
                 ),
+                "unique_patients_all_visits": int(encounter_metrics.unique_patients_all_visits or 0),
                 "scheduled_appointments": int(
                     appointment_metrics.scheduled_appointments or 0
                 ),
@@ -559,6 +601,7 @@ async def visits_report(
             },
             "visit_linked": visit_linked,
             "items": items,
+            **({"daily": daily} if include_daily else {}),
         },
         "meta": {
             "page": page,
@@ -603,6 +646,7 @@ async def _weekly_metrics(
         func.count(Encounter.id).label("visits_total"),
         func.count(Encounter.id).filter(Encounter.status == "completed").label("completed_visits"),
         func.count(func.distinct(Encounter.patient_id)).filter(Encounter.status == "completed").label("unique_visited_patients"),
+        func.count(func.distinct(Encounter.patient_id)).label("unique_patients_all_visits"),
     )
     appointment_counters = (
         func.count(Appointment.id).label("scheduled_appointments"),
@@ -610,7 +654,7 @@ async def _weekly_metrics(
         func.count(Appointment.id).filter(Appointment.status == "no_show").label("no_show_appointments"),
     )
     totals = {key: 0 for key in (
-        "visits_total", "completed_visits", "unique_visited_patients",
+        "visits_total", "completed_visits", "unique_visited_patients", "unique_patients_all_visits",
         "scheduled_appointments", "cancelled_appointments", "no_show_appointments",
     )}
     days: dict[date, dict[str, Any]] = {}
@@ -620,7 +664,7 @@ async def _weekly_metrics(
         return mapping.setdefault(key, {name: 0 for name in totals})
 
     for model, filters, expressions, names in (
-        (Encounter, encounter_filters, counters, ("visits_total", "completed_visits", "unique_visited_patients")),
+        (Encounter, encounter_filters, counters, ("visits_total", "completed_visits", "unique_visited_patients", "unique_patients_all_visits")),
         (Appointment, appointment_filters, appointment_counters, ("scheduled_appointments", "cancelled_appointments", "no_show_appointments")),
     ):
         query = _report_patient_join(select(*expressions), model, patient_filter).where(*filters)
@@ -635,20 +679,22 @@ async def _weekly_metrics(
             ).where(*filters).group_by(day, model.practitioner_id)
             for row in (await db.execute(query)).all():
                 for name in names:
-                    if name != "unique_visited_patients":
+                    if name not in ("unique_visited_patients", "unique_patients_all_visits"):
                         bucket(days, row.day)[name] += int(getattr(row, name) or 0)
                         bucket(practitioners, row.practitioner_id)[name] += int(getattr(row, name) or 0)
             if model is Encounter:
                 query = _report_patient_join(
-                    select(day.label("day"), counters[2]), Encounter, patient_filter
+                    select(day.label("day"), counters[2], counters[3]), Encounter, patient_filter
                 ).where(*filters).group_by(day)
                 for row in (await db.execute(query)).all():
                     bucket(days, row.day)["unique_visited_patients"] = int(row.unique_visited_patients or 0)
+                    bucket(days, row.day)["unique_patients_all_visits"] = int(row.unique_patients_all_visits or 0)
                 query = _report_patient_join(
-                    select(Encounter.practitioner_id, counters[2]), Encounter, patient_filter
+                    select(Encounter.practitioner_id, counters[2], counters[3]), Encounter, patient_filter
                 ).where(*filters).group_by(Encounter.practitioner_id)
                 for row in (await db.execute(query)).all():
                     bucket(practitioners, row.practitioner_id)["unique_visited_patients"] = int(row.unique_visited_patients or 0)
+                    bucket(practitioners, row.practitioner_id)["unique_patients_all_visits"] = int(row.unique_patients_all_visits or 0)
 
     money_rows: dict[str, dict[tuple, dict[str, int]]] = {}
     for name, model, instant, status in (
@@ -662,17 +708,19 @@ async def _weekly_metrics(
         day = local_day(instant)
         query = select(model.currency, func.sum(model.amount_minor).label("amount"))
         if breakdown:
-            query = query.add_columns(day.label("day"), Encounter.practitioner_id.label("practitioner_id"))
+            query = query.add_columns(day.label("day"), Invoice.practitioner_id.label("practitioner_id"))
         if breakdown or practitioner_uuid or patient_filter is not None:
             if model is not Invoice:
                 query = query.join(Invoice, Invoice.id == model.invoice_id)
-            query = query.join(Encounter, Encounter.id == Invoice.encounter_id)
+            if patient_filter is not None:
+                query = query.join(Encounter, Encounter.id == Invoice.encounter_id)
             if practitioner_uuid:
-                filters.append(Encounter.practitioner_id == practitioner_uuid)
-            query = _report_patient_join(query, Encounter, patient_filter)
+                filters.append(Invoice.practitioner_id == practitioner_uuid)
+            if patient_filter is not None:
+                query = _report_patient_join(query, Encounter, patient_filter)
         query = query.where(*filters)
         if breakdown:
-            query = query.group_by(model.currency, day, Encounter.practitioner_id)
+            query = query.group_by(model.currency, day, Invoice.practitioner_id)
         else:
             query = query.group_by(model.currency)
         grouped = {}
@@ -684,10 +732,10 @@ async def _weekly_metrics(
     def money_for(keys):
         keys = tuple(keys)
         by_name = {}
-        for name in money_rows:
+        for name, group in money_rows.items():
             amounts = {}
             for key in keys:
-                for currency, amount in money_rows[name].get(key, {}).items():
+                for currency, amount in group.get(key, {}).items():
                     amounts[currency] = amounts.get(currency, 0) + amount
             by_name[name] = amounts
         money, reason = _single_currency_money(
@@ -701,8 +749,8 @@ async def _weekly_metrics(
     money, reason = money_for(all_keys)
     totals.update(money)
     if breakdown:
-        for name in money_rows:
-            for day, practitioner_id in money_rows[name]:
+        for group in money_rows.values():
+            for day, practitioner_id in group:
                 bucket(days, day)
                 bucket(practitioners, practitioner_id)
         for day, values in days.items():
@@ -710,6 +758,225 @@ async def _weekly_metrics(
         for practitioner_id, values in practitioners.items():
             values.update(money_for(key for key in all_keys if key[1] == practitioner_id)[0])
     return {"metrics": totals, "money_unavailable_reason": reason, "days": days, "practitioners": practitioners}
+
+
+def _empty_daily_metrics(fallback_currency: str | None) -> dict[str, Any]:
+    money, _ = _single_currency_money({}, {}, {}, fallback_currency)
+    return {
+        **{key: 0 for key in ("visits_total", "completed_visits", "unique_visited_patients", "unique_patients_all_visits", "scheduled_appointments", "cancelled_appointments", "no_show_appointments")},
+        **(money or {key: None for key in ("billed_amount", "payments_received", "refunds", "net_collections", "currency")}),
+    }
+
+
+async def _self_report_context(db: AsyncSession, account: UserAccount, facility_uuid: UUID):
+    row = (await db.execute(
+        select(Organization, Facility, FacilitySchedule.timezone, Practitioner)
+        .join(StaffMember, StaffMember.organization_id == Organization.id)
+        .join(StaffAssignment, StaffAssignment.staff_member_id == StaffMember.id)
+        .join(Facility, Facility.organization_id == Organization.id)
+        .outerjoin(FacilitySchedule, FacilitySchedule.facility_id == Facility.id)
+        .join(Practitioner, and_(Practitioner.organization_id == Organization.id,
+                                 Practitioner.user_account_id == account.id))
+        .where(StaffMember.user_account_id == account.id, StaffMember.is_active.is_(True),
+               StaffAssignment.is_active.is_(True),
+               StaffAssignment.role_code.in_(("doctor", "clinical_practitioner")),
+               or_(StaffAssignment.facility_id == facility_uuid, StaffAssignment.facility_id.is_(None)),
+               Organization.is_active.is_(True), Facility.id == facility_uuid,
+               Facility.is_active.is_(True), Practitioner.is_active.is_(True))
+    )).first()
+    if row is None:
+        raise _error(403, "PRACTITIONER_ACCESS_REQUIRED", "Active practitioner assignment is required.")
+    return row[0], row[1], row[2] or DEFAULT_TIMEZONE, row[3]
+
+
+async def _range_summary(db, organization, facility, timezone_name, date_from, date_to, practitioner_uuid):
+    if date_from > date_to:
+        raise _error(422, "INVALID_DATE_RANGE", "date_from must be on or before date_to.")
+    if (date_to - date_from).days + 1 > MAX_REPORT_DAYS:
+        raise _error(422, "REPORT_RANGE_TOO_LARGE", f"Date range cannot exceed {MAX_REPORT_DAYS} days.")
+    tz = timezone(timezone_name)
+    start = to_utc(local_datetime(date_from, time.min, tz), tz)
+    end = to_utc(local_datetime(date_to + timedelta(days=1), time.min, tz), tz)
+    as_of = datetime.now(UTC)
+    cutoff = min(end, as_of)
+    fallback = await db.scalar(select(ConsultationFee.currency).where(
+        ConsultationFee.facility_id == facility.id, ConsultationFee.is_active.is_(True)).limit(1))
+    current = await _weekly_metrics(db, organization.id, facility.id, start, cutoff,
+                                    timezone_name, practitioner_uuid, None, fallback, breakdown=True)
+    days = (date_to - date_from).days + 1
+    trend_from = date_from - timedelta(days=6) if days == 1 else date_from
+    trend_start = to_utc(local_datetime(trend_from, time.min, tz), tz)
+    trend = current if trend_from == date_from else await _weekly_metrics(
+        db, organization.id, facility.id, trend_start, cutoff,
+        timezone_name, practitioner_uuid, None, fallback, breakdown=True)
+    previous_start = to_utc(local_datetime(date_from - timedelta(days=days), time.min, tz), tz)
+    previous_end = to_utc(cutoff.astimezone(tz) - timedelta(days=days), tz)
+    previous = (await _weekly_metrics(db, organization.id, facility.id, previous_start,
+                                      previous_end, timezone_name, practitioner_uuid, None, fallback,
+                                      breakdown=False)) if cutoff > start else None
+    return {"timezone": timezone_name, "as_of_utc": as_of.isoformat(),
+            "selected_cutoff_utc": cutoff.isoformat(),
+            "selected_range": {"local_from": date_from.isoformat(), "local_to": date_to.isoformat(),
+                               "utc_from": start.isoformat(), "utc_to_exclusive": end.isoformat()},
+            "metrics": current["metrics"],
+            "availability": {"money": current["money_unavailable_reason"] is None,
+                             "reason": current["money_unavailable_reason"], "amount_unit": "minor"},
+            "trend": {"local_from": trend_from.isoformat(), "local_to": date_to.isoformat(),
+                      "daily": [{"date": (trend_from + timedelta(days=offset)).isoformat(),
+                                 "metrics": trend["days"].get(trend_from + timedelta(days=offset),
+                                 _empty_daily_metrics(fallback))}
+                                for offset in range((date_to - trend_from).days + 1)]},
+            "previous_period": {"local_from": (date_from - timedelta(days=days)).isoformat(),
+                                "utc_from": previous_start.isoformat(), "utc_to_exclusive": previous_end.isoformat(),
+                                "metrics": previous["metrics"],
+                                "availability": {"money": previous["money_unavailable_reason"] is None,
+                                                 "reason": previous["money_unavailable_reason"], "amount_unit": "minor"}} if previous else None}
+
+
+@router.get("/overview")
+async def reporting_overview(
+    facility_uuid: UUID, date_from: date, date_to: date,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization, facility, timezone_name = await _report_context(db, account, facility_uuid)
+    data = await _range_summary(db, organization, facility, timezone_name, date_from, date_to, None)
+    data["outstanding"] = (await outstanding_snapshot(facility_uuid, account, db))["data"]
+    as_of = datetime.now(UTC)
+    _, _, balance = _balance_columns(as_of)
+    unpaid = (await db.execute(select(Invoice.id, balance)
+        .where(Invoice.organization_id == organization.id, Invoice.facility_id == facility.id,
+               Invoice.status != "voided", Invoice.issued_at <= as_of, balance > 0)
+        .order_by(Invoice.issued_at, Invoice.id).limit(5))).all()
+    attention = [{"kind": "unpaid_invoice", "label": "Unpaid invoice",
+                  "amount_minor": int(amount), "invoice_uuid": str(invoice_id),
+                  "destination": "/billing/invoices", "filters": {"outstanding_only": True}}
+                 for invoice_id, amount in unpaid]
+    if len(attention) < 5:
+        free_fee = select(ConsultationFee.id).where(
+            ConsultationFee.organization_id == Encounter.organization_id,
+            ConsultationFee.facility_id == Encounter.facility_id,
+            ConsultationFee.amount_minor == 0,
+            ConsultationFee.effective_from <= func.date(func.timezone(timezone_name, Encounter.started_at)),
+            or_(ConsultationFee.effective_to.is_(None),
+                ConsultationFee.effective_to >= func.date(func.timezone(timezone_name, Encounter.started_at)))).correlate(Encounter).exists()
+        gaps = (await db.execute(select(Encounter.id, Encounter.started_at)
+            .where(Encounter.organization_id == organization.id, Encounter.facility_id == facility.id,
+                   Encounter.status == "completed",
+                   ~select(Invoice.id).where(Invoice.encounter_id == Encounter.id,
+                                             Invoice.status != "voided").correlate(Encounter).exists(),
+                   ~free_fee)
+            .order_by(Encounter.started_at.desc(), Encounter.id.desc())
+            .limit(5 - len(attention)))).all()
+        attention.extend({"kind": "billing_review", "label": "Review billing",
+                          "encounter_uuid": str(encounter_id), "amount_minor": None,
+                          "destination": "/reports/visits",
+                          "filters": {"date_from": to_timezone(started_at, timezone(timezone_name)).date().isoformat(),
+                                      "date_to": to_timezone(started_at, timezone(timezone_name)).date().isoformat()}}
+                         for encounter_id, started_at in gaps)
+    data["attention"] = attention
+    data["demo_provenance"] = "unknown_or_synthetic_demo"
+    return {"success": True, "data": data, "meta": {}}
+
+
+@router.get("/practitioners")
+async def practitioner_breakdown(
+    facility_uuid: UUID, date_from: date, date_to: date,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization, facility, timezone_name = await _report_context(db, account, facility_uuid)
+    if date_from > date_to:
+        raise _error(422, "INVALID_DATE_RANGE", "date_from must be on or before date_to.")
+    if (date_to - date_from).days + 1 > MAX_REPORT_DAYS:
+        raise _error(422, "REPORT_RANGE_TOO_LARGE", f"Date range cannot exceed {MAX_REPORT_DAYS} days.")
+    tz = timezone(timezone_name)
+    start = to_utc(local_datetime(date_from, time.min, tz), tz)
+    end = to_utc(local_datetime(date_to + timedelta(days=1), time.min, tz), tz)
+    fallback = await db.scalar(select(ConsultationFee.currency).where(
+        ConsultationFee.facility_id == facility.id, ConsultationFee.is_active.is_(True)).limit(1))
+    aggregate = await _weekly_metrics(db, organization.id, facility.id, start, min(end, datetime.now(UTC)),
+                                      timezone_name, None, None, fallback, breakdown=True)
+    ids = [key for key in aggregate["practitioners"] if key is not None]
+    names = dict((await db.execute(select(Practitioner.id, Practitioner.person_name).where(
+        Practitioner.organization_id == organization.id, Practitioner.id.in_(ids)))).all()) if ids else {}
+    return {"success": True, "data": {"timezone": timezone_name,
+            "range": {"local_from": date_from.isoformat(), "local_to": date_to.isoformat()},
+            "availability": {"money": aggregate["money_unavailable_reason"] is None,
+                             "reason": aggregate["money_unavailable_reason"], "amount_unit": "minor"},
+            "items": [{"practitioner_uuid": str(key), "name": names.get(key), "metrics": value}
+                      for key, value in aggregate["practitioners"].items() if key is not None],
+            "unallocated": aggregate["practitioners"].get(None, _empty_daily_metrics(fallback))},
+            "meta": {}}
+
+
+@router.get("/my-practice")
+async def my_practice_report(
+    facility_uuid: UUID, date_from: date, date_to: date,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    practitioner_uuid: UUID | None = None,
+) -> dict[str, Any]:
+    organization, facility, timezone_name, practitioner = await _self_report_context(db, account, facility_uuid)
+    if practitioner_uuid is not None and practitioner_uuid != practitioner.id:
+        raise _error(403, "PRACTITIONER_SCOPE_DENIED", "Another practitioner's data is not available.")
+    data = await _range_summary(db, organization, facility, timezone_name, date_from, date_to, practitioner.id)
+    data["practitioner"] = {"uuid": str(practitioner.id), "name": practitioner.person_name}
+    data["collections_label"] = "Collected for my services"
+    data["compensation_available"] = bool(await db.scalar(select(CompensationPolicy.id).where(
+        CompensationPolicy.organization_id == organization.id,
+        CompensationPolicy.facility_id == facility.id,
+        CompensationPolicy.practitioner_id == practitioner.id).limit(1)))
+    data["demo_provenance"] = "unknown_or_synthetic_demo"
+    return {"success": True, "data": data, "meta": {}}
+
+
+@router.get("/my-visits")
+async def my_visits_report(
+    facility_uuid: UUID, date_from: date, date_to: date,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    practitioner_uuid: UUID | None = None,
+    patient_query: str | None = Query(default=None, min_length=1, max_length=120),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> dict[str, Any]:
+    organization, facility, timezone_name, practitioner = await _self_report_context(db, account, facility_uuid)
+    if practitioner_uuid is not None and practitioner_uuid != practitioner.id:
+        raise _error(403, "PRACTITIONER_SCOPE_DENIED", "Another practitioner's data is not available.")
+    if date_from > date_to:
+        raise _error(422, "INVALID_DATE_RANGE", "date_from must be on or before date_to.")
+    if (date_to - date_from).days + 1 > MAX_REPORT_DAYS:
+        raise _error(422, "REPORT_RANGE_TOO_LARGE", f"Date range cannot exceed {MAX_REPORT_DAYS} days.")
+    if patient_query is not None and not patient_query.strip():
+        raise _error(422, "INVALID_PATIENT_QUERY", "patient_query cannot be blank.")
+    tz = timezone(timezone_name)
+    filters = _encounter_filters(
+        organization.id, facility.id,
+        to_utc(local_datetime(date_from, time.min, tz), tz),
+        to_utc(local_datetime(date_to + timedelta(days=1), time.min, tz), tz),
+        practitioner.id, _patient_filter(patient_query))
+    base = (select(Encounter, Patient, Person)
+            .join(Patient, and_(Patient.id == Encounter.patient_id,
+                                Patient.organization_id == Encounter.organization_id))
+            .join(Person, and_(Person.id == Patient.person_id,
+                               Person.organization_id == Encounter.organization_id))
+            .where(*filters))
+    total = int(await db.scalar(select(func.count()).select_from(base.subquery())) or 0)
+    rows = (await db.execute(base.order_by(Encounter.started_at.desc(), Encounter.id.desc())
+                             .offset((page - 1) * page_size).limit(page_size))).all()
+    return {"success": True, "data": {"timezone": timezone_name,
+            "practitioner": {"uuid": str(practitioner.id), "name": practitioner.person_name},
+            "items": [{"encounter_uuid": str(encounter.id),
+                       "visit_started_at": encounter.started_at.isoformat(),
+                       "completed_at": encounter.completed_at.isoformat() if encounter.completed_at else None,
+                       "status": encounter.status,
+                       "patient": {"uuid": str(patient.id),
+                                   "display_name": f"{person.first_name} {person.last_name or ''}".strip(),
+                                   "mrn": patient.mrn}}
+                      for encounter, patient, person in rows]},
+            "meta": {"page": page, "page_size": page_size, "total": total,
+                     "total_pages": (total + page_size - 1) // page_size}}
 
 
 @router.get("/weekly")
@@ -754,12 +1021,7 @@ async def weekly_overview(
     daily = []
     for offset in range(7):
         day = start_day + timedelta(days=offset)
-        daily.append({"date": day.isoformat(), "metrics": current["days"].get(day, {
-            **{key: 0 for key in ("visits_total", "completed_visits", "unique_visited_patients", "scheduled_appointments", "cancelled_appointments", "no_show_appointments")},
-            **(lambda money: money if money else {key: None for key in (
-                "billed_amount", "payments_received", "refunds", "net_collections", "currency"
-            )})(_single_currency_money({}, {}, {}, fallback_currency)[0]),
-        })})
+        daily.append({"date": day.isoformat(), "metrics": current["days"].get(day, _empty_daily_metrics(fallback_currency))})
     return {"success": True, "data": {
         "timezone": timezone_name,
         "week": {"local_from": start_day.isoformat(), "local_to": (end_day - timedelta(days=1)).isoformat(),
