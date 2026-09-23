@@ -36,7 +36,6 @@ async def create_organization(
         city_id=payload.city_id,
         postal_code=payload.postal_code,
         phone=payload.phone,
-        timezone=payload.timezone,
     )
     return {
         "success": True,
