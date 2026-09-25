@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from src.app.domains.communication.delivery.maintenance import should_run_maintenance
 from src.app.domains.communication.delivery.providers.fake import (
     FakeEmailProvider,
@@ -303,3 +305,59 @@ def test_dispatcher_honours_retry_after_seconds():
     run(_dispatcher(repository, {"email": provider}).run_once(None, owner="w1"))
     assert job.status == JOB_STATUS_FAILED
     assert (job.due_at - before).total_seconds() >= 40
+
+
+# ------------------------------------------------- worker resilience (BE09)
+
+
+class _FakeSessionContext:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _HangingDispatcher:
+    def __init__(self):
+        self.cancelled = False
+
+    async def run_once(self, db, *, owner):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+def test_bounded_pass_times_out_and_cancels_a_stalled_provider(monkeypatch):
+    from src.app.domains.communication.delivery import worker as worker_module
+
+    monkeypatch.setattr(worker_module, "local_session", lambda: _FakeSessionContext())
+    dispatcher = _HangingDispatcher()
+
+    async def scenario():
+        with pytest.raises(asyncio.TimeoutError):
+            await worker_module.run_pass_bounded(
+                dispatcher, owner="test", timeout_seconds=1
+            )
+
+    run(scenario())
+    assert dispatcher.cancelled is True
+
+
+def test_reset_providers_swallows_provider_reset_errors():
+    from src.app.domains.communication.delivery import worker as worker_module
+
+    calls = []
+
+    class _Resettable:
+        def reset(self):
+            calls.append("reset")
+
+    class _Broken:
+        def reset(self):
+            raise RuntimeError("boom")
+
+    worker_module._reset_providers({"ok": _Resettable(), "broken": _Broken()})
+    assert calls == ["reset"]

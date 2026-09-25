@@ -383,6 +383,43 @@ def test_send_persists_sender_from_auth_and_xss_as_text(monkeypatch):
     assert item["body"] == "<img src=x onerror=alert(1)>"
 
 
+def test_send_fans_out_to_every_member_but_notifies_only_others(monkeypatch):
+    service, repository, delivery = _chat_service(monkeypatch)
+    captured: dict = {}
+
+    async def capture_notify(db, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(chat_service, "record_notification", capture_notify)
+
+    context = _context()
+    other_a, other_b = uuid4(), uuid4()
+    conversation = _seed_direct(service, repository, context, other_a)
+    run(
+        service.repository.add_member(
+            None,
+            conversation_id=conversation.id,
+            organization_id=context.organization_id,
+            staff_member_id=other_b,
+        )
+    )
+    run(
+        service.send_message(
+            FakeDb(repository), context, conversation.id, body="hi", client_message_id="fan1"
+        )
+    )
+
+    fanout = {
+        job["recipient_staff_id"]
+        for job in delivery.jobs
+        if job["event_type"] == "message.created"
+    }
+    assert fanout == {context.staff_member_id, other_a, other_b}
+    # The sender's other sessions get realtime, but the sender is not notified.
+    assert set(captured["recipient_staff_ids"]) == {other_a, other_b}
+
+
 def test_direct_conversation_dedupes(monkeypatch):
     service, repository, _delivery = _chat_service(monkeypatch)
     context = _context()

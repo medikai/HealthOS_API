@@ -7,6 +7,7 @@ no provider-side token revocation API, so server-controlled revocation is
 implemented by bumping the stored channel generation (see ``RealtimeChannelState``).
 """
 
+import asyncio
 from datetime import timedelta
 from typing import Any
 
@@ -32,6 +33,15 @@ class AblyRealtimeProvider:
     def configured(self) -> bool:
         return bool(self._api_key)
 
+    def reset(self) -> None:
+        """Drop the cached REST client so the next call reconnects.
+
+        Called by the worker after a timed-out pass. A half-open pooled socket
+        can otherwise keep every subsequent publish waiting forever.
+        """
+        if self._api_key:
+            _CLIENTS.pop(self._api_key, None)
+
     def _client(self):
         if not self._api_key:
             raise ProviderUnavailable("ably_not_configured", "Ably is not configured.")
@@ -42,7 +52,16 @@ class AblyRealtimeProvider:
             except ImportError as exc:  # pragma: no cover - dependency declared
                 raise ProviderUnavailable("ably_sdk_missing", "Ably SDK is not installed.") from exc
             try:
-                client = AblyRest(self._api_key)
+                # Explicit, finite HTTP timeouts and bounded retries: a stalled
+                # broker connection must surface as a retryable provider error,
+                # never an unbounded await.
+                client = AblyRest(
+                    self._api_key,
+                    http_open_timeout=5,
+                    http_request_timeout=10,
+                    http_max_retry_count=2,
+                    http_max_retry_duration=15,
+                )
             except Exception as exc:  # invalid key material -> unavailable, never dummy
                 raise ProviderUnavailable("ably_key_invalid", "Ably credentials are invalid.") from exc
             _CLIENTS[self._api_key] = client
@@ -60,9 +79,13 @@ class AblyRealtimeProvider:
                     "ttl": timedelta(seconds=int(ttl_seconds)),
                 }
             )
+        except asyncio.CancelledError:
+            self.reset()
+            raise
         except ProviderUnavailable:
             raise
         except Exception as exc:
+            self.reset()
             raise ProviderUnavailable("ably_token_failed", "Ably token request failed.") from exc
         # A signed TokenRequest: key_name/timestamp/nonce/mac/capability/client_id/ttl.
         return request.to_dict()
@@ -71,9 +94,15 @@ class AblyRealtimeProvider:
         client = self._client()
         try:
             await client.channels.get(channel).publish(event_type, payload)
+        except asyncio.CancelledError:
+            # Pass timeout: drop the possibly half-open connection.
+            self.reset()
+            raise
         except ProviderUnavailable:
+            self.reset()
             raise
         except Exception as exc:
+            self.reset()
             raise ProviderUnavailable("ably_publish_failed", "Ably publish failed.") from exc
         return {"provider": "ably", "channel": channel, "event_type": event_type}
 

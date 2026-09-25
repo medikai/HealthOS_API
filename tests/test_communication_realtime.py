@@ -278,3 +278,59 @@ def test_http_requires_membership(client):
         assert response.status_code == 403
     finally:
         app.dependency_overrides.clear()
+
+
+# ------------------------------------------------ Ably transport resilience
+
+
+def test_ably_client_is_built_with_bounded_http_timeouts(monkeypatch):
+    import ably
+
+    captured: dict = {}
+
+    class _FakeAblyRest:
+        def __init__(self, key, **kwargs):
+            captured["key"] = key
+            captured.update(kwargs)
+
+    monkeypatch.setattr(ably, "AblyRest", _FakeAblyRest)
+    provider = AblyRealtimeProvider(
+        api_key="test.key:secret", namespace="dev", presence_enabled=False
+    )
+    try:
+        provider._client()
+        assert captured["http_open_timeout"] == 5
+        assert captured["http_request_timeout"] == 10
+        assert captured["http_max_retry_count"] == 2
+        assert captured["http_max_retry_duration"] == 15
+    finally:
+        provider.reset()
+
+
+def test_ably_provider_drops_cached_client_on_cancelled_publish(monkeypatch):
+    from src.app.domains.communication.realtime.providers import ably as ably_module
+
+    class _HangingChannel:
+        async def publish(self, *args, **kwargs):
+            await asyncio.sleep(30)
+
+    class _Channels:
+        def get(self, name):
+            return _HangingChannel()
+
+    class _FakeClient:
+        channels = _Channels()
+
+    key = "test.key:secret"
+    provider = AblyRealtimeProvider(api_key=key, namespace="dev", presence_enabled=False)
+    monkeypatch.setitem(ably_module._CLIENTS, key, _FakeClient())
+
+    async def scenario():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                provider.publish(channel="dev:t:test", event_type="message.created", payload={}),
+                timeout=0.2,
+            )
+
+    run(scenario())
+    assert key not in ably_module._CLIENTS

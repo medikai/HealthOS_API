@@ -508,13 +508,17 @@ class ChatService:
         await db.flush()
 
         members = await self.repository.list_members(db, conversation_id)
+        # Realtime fan-out reaches every currently authorized member, including
+        # the sender, so the sender's other sessions/tabs reconcile too. The
+        # in-app notification still suppresses the sender.
+        fanout = list(dict.fromkeys(m.staff_member_id for m in members))
         recipients = [
-            m.staff_member_id
-            for m in members
-            if m.staff_member_id != membership.staff_member_id
+            staff_id
+            for staff_id in fanout
+            if staff_id != membership.staff_member_id
         ]
         await self._enqueue_message_jobs(
-            db, conversation=conversation, message=message, recipients=recipients
+            db, conversation=conversation, message=message, recipients=fanout
         )
         await self._notify_recipients(
             db,
