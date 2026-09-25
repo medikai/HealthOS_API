@@ -584,6 +584,7 @@ async def accept_invitation(
         "sub": str(account.id),
         "email": account.email,
         "name": account.display_name,
+        "ver": account.credentials_version,
     })
 
     return {

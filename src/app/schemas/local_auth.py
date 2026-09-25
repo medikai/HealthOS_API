@@ -17,3 +17,17 @@ class LocalRegisterPayload(BaseModel):
 class LocalLoginPayload(BaseModel):
     email: EmailStr
     password: str
+
+
+class ForgotPasswordPayload(BaseModel):
+    email: EmailStr
+
+
+class VerifyRecoveryCodePayload(BaseModel):
+    challenge_id: UUID
+    code: str = Field(min_length=4, max_length=12)
+
+
+class ResetPasswordPayload(BaseModel):
+    grant: str = Field(min_length=16, max_length=256)
+    password: str = Field(min_length=6, max_length=128)

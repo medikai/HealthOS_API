@@ -6,6 +6,7 @@ from .billing import router as billing_router
 from .earnings import router as earnings_router
 from .calendar import router as calendar_router
 from .clinical import router as clinical_router
+from .communication import router as communication_router
 from .dashboard import router as dashboard_router
 from .documents import router as documents_router
 from .encounters import router as encounters_router
@@ -35,6 +36,7 @@ router.include_router(scheduling_router)
 router.include_router(queue_router)
 router.include_router(encounters_router)
 router.include_router(clinical_router)
+router.include_router(communication_router)
 router.include_router(dashboard_router)
 router.include_router(calendar_router)
 router.include_router(staff_router)

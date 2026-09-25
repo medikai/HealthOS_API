@@ -10,6 +10,8 @@ from uuid6 import uuid7
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
 from ...core.events import make_event, publish
+from ...domains.communication.notifications.recipients import practitioner_staff_ids
+from ...domains.communication.status.service import work_status_service
 from ...domains.governance.audit import record_audit
 from ...models.care import Appointment, Encounter, Practitioner, QueueEntry, Vital
 from ...models.identity import Patient, Person, UserAccount
@@ -223,6 +225,19 @@ async def _start(
         linked_appointment.version += 1
         linked_appointment.status = "in_consultation"
     queue.status = "in_consultation"
+    if encounter.practitioner_id:
+        for staff_id in await practitioner_staff_ids(
+            db,
+            organization_id=encounter.organization_id,
+            practitioner_id=encounter.practitioner_id,
+        ):
+            await work_status_service.apply_derived_status(
+                db,
+                organization_id=encounter.organization_id,
+                facility_id=encounter.facility_id,
+                staff_member_id=staff_id,
+                work_state="with-patient",
+            )
     try:
         await db.commit()
     except Exception:

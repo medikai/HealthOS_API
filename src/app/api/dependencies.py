@@ -132,12 +132,23 @@ async def get_current_identity_account(
                     token, SECRET_KEY.get_secret_value(), algorithms=[ALGORITHM]
                 )
                 sub = payload.get("sub")
-                if sub:
-                    account = await db.get(UserAccount, uuid_pkg.UUID(sub))
-                    if account and account.is_active:
-                        return account
             except Exception:
                 raise UnauthorizedException("Invalid or expired token.")
+            account = None
+            if sub:
+                try:
+                    account = await db.get(UserAccount, uuid_pkg.UUID(sub))
+                except ValueError:
+                    account = None
+            if (
+                account
+                and account.is_active
+                and payload.get("ver") == account.credentials_version
+            ):
+                return account
+            # A presented bearer token is authoritative: never fall through to
+            # the local demo bypass or a session cookie for a stale token.
+            raise UnauthorizedException("Invalid or expired token.")
 
         # Explicit emergency/demo bypass. Keep this false on any public deployment.
         if not settings.LOGTO_ENABLED and settings.AUTH_LOCAL_DEV_BYPASS:

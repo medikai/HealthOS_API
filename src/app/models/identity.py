@@ -1,7 +1,16 @@
 import uuid as uuid_pkg
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from uuid6 import uuid7
@@ -23,6 +32,8 @@ class UserAccount(Base):
     display_name: Mapped[str | None] = mapped_column(String(255), default=None)
     avatar_url: Mapped[str | None] = mapped_column(String(2_048), default=None)
     password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
+    # Bumped on password reset to invalidate already-issued local access tokens.
+    credentials_version: Mapped[int] = mapped_column(Integer, default=1)
     registration_specialty: Mapped[str | None] = mapped_column(String(255), default=None)
     registration_specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.specialty.id"), default=None)
     registration_medical_council_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.medical_council.id"), default=None)
@@ -87,3 +98,88 @@ class Patient(Base):
     mrn: Mapped[str] = mapped_column(String(32), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+
+
+class PasswordRecoveryChallenge(Base):
+    """Local password-recovery challenge (auth-owned).
+
+    The OTP is never stored in plain text: ``code_verifier`` is a keyed HMAC
+    over purpose/account/challenge/code. Challenges are single-use and
+    generation-bound; a resend consumes prior challenges.
+    """
+
+    __tablename__ = "password_recovery_challenge"
+    __table_args__ = (
+        Index("ix_identity_recovery_challenge_account", "user_account_id", "created_at"),
+        Index("ix_identity_recovery_challenge_expires", "expires_at"),
+        {"schema": "identity"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    user_account_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("identity.user_account.id", ondelete="CASCADE"), index=True
+    )
+    email_hash: Mapped[str] = mapped_column(String(128))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    purpose: Mapped[str] = mapped_column(String(32), default="password_reset")
+    generation: Mapped[int] = mapped_column(Integer, default=1)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5)
+    ip_hash: Mapped[str | None] = mapped_column(String(128), default=None)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+
+
+class PasswordRecoveryGrant(Base):
+    """Single-use, short-lived reset grant issued only after OTP verification."""
+
+    __tablename__ = "password_recovery_grant"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_identity_recovery_grant_token"),
+        Index("ix_identity_recovery_grant_expires", "expires_at"),
+        {"schema": "identity"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    challenge_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("identity.password_recovery_challenge.id", ondelete="CASCADE"), index=True
+    )
+    user_account_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("identity.user_account.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+
+
+class PasswordRecoveryThrottle(Base):
+    """Aggregate per-account / per-IP recovery request throttling (no plaintext key)."""
+
+    __tablename__ = "password_recovery_throttle"
+    __table_args__ = (
+        UniqueConstraint("scope", "key_hash", name="uq_identity_recovery_throttle"),
+        {"schema": "identity"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    scope: Mapped[str] = mapped_column(String(16))
+    key_hash: Mapped[str] = mapped_column(String(128))
+    window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
