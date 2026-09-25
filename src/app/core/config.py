@@ -170,6 +170,12 @@ class CommunicationSettings(BaseSettings):
     COMMUNICATION_ENABLED: bool = True
     COMMUNICATION_WORKER_BATCH_SIZE: int = 25
     COMMUNICATION_WORKER_POLL_SECONDS: float = 2.0
+    # Hard ceiling for one dispatch pass. A stalled provider/network call must
+    # never pause the claim/reclaim loop indefinitely; a timed-out pass leaves
+    # jobs leased and they are reclaimed after COMMUNICATION_JOB_LEASE_SECONDS.
+    # This is a hang backstop, not a latency SLA: keep it comfortably above a
+    # full batch's normal publish time.
+    COMMUNICATION_WORKER_PASS_TIMEOUT_SECONDS: float = 120.0
     COMMUNICATION_WORKER_MAINTENANCE_EVERY_PASSES: int = 60
     COMMUNICATION_JOB_LEASE_SECONDS: int = 60
     COMMUNICATION_JOB_MAX_ATTEMPTS: int = 5

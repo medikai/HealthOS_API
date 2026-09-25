@@ -63,6 +63,40 @@ def worker_owner() -> str:
     return f"worker-{socket.gethostname()}-{os.getpid()}"
 
 
+def _reset_providers(providers: dict[str, DeliveryProvider]) -> None:
+    """Drop cached provider connections after a stalled/failed pass."""
+    for provider in providers.values():
+        reset = getattr(provider, "reset", None)
+        if reset is None:
+            continue
+        with contextlib.suppress(Exception):
+            reset()
+
+
+async def run_pass_bounded(
+    dispatcher: DeliveryDispatcher,
+    *,
+    owner: str,
+    timeout_seconds: float | None = None,
+) -> DispatchOutcome:
+    """One dispatch pass that can never block the worker forever.
+
+    A stalled provider/network call (observed: a half-open Ably connection) must
+    not pause claim/reclaim indefinitely. On timeout the pass is cancelled, the
+    session is closed, and any jobs claimed in that pass stay leased until
+    ``reclaim_expired`` returns them to pending.
+    """
+    timeout = float(
+        timeout_seconds
+        if timeout_seconds is not None
+        else settings.COMMUNICATION_WORKER_PASS_TIMEOUT_SECONDS
+    )
+    async with local_session() as db:
+        return await asyncio.wait_for(
+            dispatcher.run_once(db, owner=owner), timeout=max(1.0, timeout)
+        )
+
+
 async def dispatch_inprocess(owner: str | None = None) -> DispatchOutcome:
     """One dispatch pass for combined dev mode. See module docstring limits."""
     dispatcher = DeliveryDispatcher(
@@ -73,8 +107,7 @@ async def dispatch_inprocess(owner: str | None = None) -> DispatchOutcome:
         base_backoff_seconds=settings.COMMUNICATION_JOB_BASE_BACKOFF_SECONDS,
         max_backoff_seconds=settings.COMMUNICATION_JOB_MAX_BACKOFF_SECONDS,
     )
-    async with local_session() as db:
-        return await dispatcher.run_once(db, owner=owner or f"inprocess-{uuid4().hex[:8]}")
+    return await run_pass_bounded(dispatcher, owner=owner or f"inprocess-{uuid4().hex[:8]}")
 
 
 async def run_forever(
@@ -98,8 +131,18 @@ async def run_forever(
     )
     while not stop_event.is_set():
         try:
-            async with local_session() as db:
-                outcome = await dispatcher.run_once(db, owner=owner)
+            outcome = await run_pass_bounded(dispatcher, owner=owner)
+        except asyncio.TimeoutError:
+            # A stalled provider call must not park the worker. Drop cached
+            # provider clients so the next pass reconnects, then continue.
+            logger.warning(
+                "communication_worker_pass_timeout",
+                owner=owner,
+                timeout_seconds=settings.COMMUNICATION_WORKER_PASS_TIMEOUT_SECONDS,
+            )
+            _reset_providers(dispatcher.providers)
+            await _sleep_or_stop(stop_event, poll_seconds)
+            continue
         except Exception:
             logger.exception("communication_worker_pass_failed", owner=owner)
             await _sleep_or_stop(stop_event, poll_seconds)
