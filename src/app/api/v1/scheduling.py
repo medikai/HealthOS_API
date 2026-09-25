@@ -23,11 +23,13 @@ from ...core.timezones import (
     timezone,
     to_timezone,
 )
+from ...domains.communication.notifications.workflow import (
+    emit_appointment_same_day_rescheduled,
+)
 from ...domains.governance.audit import record_audit
 from ...models.care import (
     Appointment,
     AppointmentBookingException,
-    Encounter,
     Practitioner,
     PractitionerAvailabilityException,
     PractitionerAvailabilityRule,
@@ -1182,11 +1184,12 @@ async def reschedule_appointment(
         "end": appointment.scheduled_end.isoformat(),
         "resource_uuid": str(appointment.resource_id) if appointment.resource_id else None,
     }
+    facility_tz = await _facility_timezone(db, appointment.facility_id)
     try:
         scheduled_start, scheduled_end = normalize_range(
             payload.scheduled_start,
             payload.scheduled_end,
-            await _facility_timezone(db, appointment.facility_id),
+            facility_tz,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
@@ -1204,6 +1207,7 @@ async def reschedule_appointment(
         )
     except ValueError as exc:
         raise _availability_http_error(exc, prefix="The new slot is unavailable: ") from None
+    old_start = appointment.scheduled_start
     appointment.scheduled_start, appointment.scheduled_end, appointment.resource_id = scheduled_start, scheduled_end, resource_id
     appointment.version += 1
     new_range = {
@@ -1221,6 +1225,16 @@ async def reschedule_appointment(
         facility_id=appointment.facility_id,
         patient_id=appointment.patient_id,
         details={"old": old_range, "new": new_range, "reason": payload.reason, "version": appointment.version},
+    )
+    old_local_date = old_start.astimezone(facility_tz).date()
+    new_local = scheduled_start.astimezone(facility_tz)
+    same_day = old_local_date == new_local.date() or new_local.date() == datetime.now(facility_tz).date()
+    await emit_appointment_same_day_rescheduled(
+        db,
+        appointment=appointment,
+        actor_user_id=account.id,
+        new_start_label=new_local.strftime("%d %b %H:%M"),
+        same_day=same_day,
     )
     try:
         await db.commit()

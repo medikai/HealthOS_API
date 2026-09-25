@@ -20,12 +20,28 @@ from ...core.security import (
 from ...crud.crud_auth_session import crud_auth_sessions
 from ...crud.crud_identity import crud_user_accounts
 from ...domains.auth.logto import logto_oidc_client
+from ...domains.auth.recovery import (
+    ExpiredRecoveryCode,
+    InvalidRecoveryCode,
+    InvalidRecoveryGrant,
+    RecoveryRateLimited,
+    build_recovery_service,
+)
+from ...domains.communication.push.service import build_push_service
+from ...domains.communication.shared.errors import ProviderUnavailable
 from ...models.identity import UserAccount
 from ...models.masters import MedicalCouncil, Specialty
 from ...models.organization import StaffMember
-from ...schemas.local_auth import LocalLoginPayload, LocalRegisterPayload
+from ...schemas.local_auth import (
+    ForgotPasswordPayload,
+    LocalLoginPayload,
+    LocalRegisterPayload,
+    ResetPasswordPayload,
+    VerifyRecoveryCodePayload,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+recovery_service = build_recovery_service(settings)
 
 
 @router.get("/login", include_in_schema=False)
@@ -130,7 +146,7 @@ async def local_register(
     await db.commit()
     await db.refresh(account)
 
-    access_token = await create_access_token({"sub": str(account.id), "email": account.email, "name": account.display_name})
+    access_token = await create_access_token({"sub": str(account.id), "email": account.email, "name": account.display_name, "ver": account.credentials_version})
     return {
         "success": True,
         "data": {
@@ -161,7 +177,7 @@ async def local_login(
     if not account.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated.")
 
-    access_token = await create_access_token({"sub": str(account.id), "email": account.email, "name": account.display_name})
+    access_token = await create_access_token({"sub": str(account.id), "email": account.email, "name": account.display_name, "ver": account.credentials_version})
     return {
         "success": True,
         "data": {
@@ -188,7 +204,11 @@ async def me(request: Request, db: AsyncSession = Depends(async_get_db)) -> dict
             if not sub:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token.")
             account = await db.get(UserAccount, uuid_pkg.UUID(sub))
-            if account is None or not account.is_active:
+            if (
+                account is None
+                or not account.is_active
+                or payload.get("ver") != account.credentials_version
+            ):
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
             return {
                 "success": True,
@@ -219,6 +239,14 @@ async def logout(
 ) -> dict[str, Any]:
     session = await crud_auth_sessions.get_session(db, session_cookie)
     await crud_auth_sessions.delete_session(db, session_cookie)
+    if session is not None:
+        # Logout invalidates push bindings so stale deliveries stop.
+        try:
+            await build_push_service(settings).revoke_account_devices(
+                db, session.user_account_id, reason="logout"
+            )
+        except Exception:  # noqa: BLE001 - logout must not fail on cleanup
+            await db.rollback()
     response.delete_cookie(
         key=settings.AUTH_SESSION_COOKIE_NAME,
         path="/",
@@ -230,6 +258,100 @@ async def logout(
         "data": {"logout_url": await logto_oidc_client.get_logout_url(session.id_token if session else None)},
         "meta": {},
     }
+
+
+def _local_auth_enabled() -> None:
+    if settings.LOGTO_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Local auth is disabled when Logto is enabled.",
+        )
+
+
+@router.post("/local/password/forgot")
+async def forgot_password(
+    payload: ForgotPasswordPayload,
+    request: Request,
+    db: AsyncSession = Depends(async_get_db),
+) -> dict[str, Any]:
+    """Neutral request/resend. Same public shape for known and unknown emails."""
+    _local_auth_enabled()
+    client_ip = request.client.host if request.client else None
+    try:
+        data = await recovery_service.request_reset(
+            db, email=str(payload.email), client_ip=client_ip
+        )
+    except RecoveryRateLimited as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "code": "RATE_LIMITED",
+                "message": "Too many recovery requests. Try again later.",
+                "details": [{"retry_after_seconds": exc.retry_after_seconds}],
+            },
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except ProviderUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "PROVIDER_UNAVAILABLE",
+                "message": "Password recovery is temporarily unavailable.",
+                "details": [{"reason": exc.reason}],
+            },
+        ) from exc
+    return {"success": True, "data": data, "meta": {}}
+
+
+@router.post("/local/password/verify")
+async def verify_password_code(
+    payload: VerifyRecoveryCodePayload,
+    db: AsyncSession = Depends(async_get_db),
+) -> dict[str, Any]:
+    _local_auth_enabled()
+    try:
+        data = await recovery_service.verify_code(
+            db, challenge_id=payload.challenge_id, code=payload.code
+        )
+    except ExpiredRecoveryCode as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "CODE_EXPIRED", "message": "The code is invalid or has expired."},
+        ) from exc
+    except InvalidRecoveryCode as exc:
+        details = []
+        if exc.attempts_remaining is not None:
+            details.append({"attempts_remaining": exc.attempts_remaining})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INCORRECT_CODE",
+                "message": "The code is invalid or has expired.",
+                "details": details,
+            },
+        ) from exc
+    return {"success": True, "data": data, "meta": {}}
+
+
+@router.post("/local/password/reset")
+async def reset_password(
+    payload: ResetPasswordPayload,
+    db: AsyncSession = Depends(async_get_db),
+) -> dict[str, Any]:
+    _local_auth_enabled()
+    try:
+        data = await recovery_service.reset_password(
+            db, grant=payload.grant, password=payload.password
+        )
+    except InvalidRecoveryGrant as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "RESET_GRANT_INVALID",
+                "message": "The reset request is invalid or has expired.",
+            },
+        ) from exc
+    return {"success": True, "data": data, "meta": {}}
 
 
 def _required_post_login_redirect_uri() -> str:

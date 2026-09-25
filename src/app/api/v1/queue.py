@@ -10,6 +10,10 @@ from ...api.dependencies import get_current_identity_account
 from ...core.appointment_views import patient_view, practitioner_view
 from ...core.db.database import async_get_db
 from ...core.events import make_event, publish
+from ...domains.communication.notifications.workflow import (
+    emit_queue_ready,
+    emit_queue_token_assigned,
+)
 from ...domains.governance.audit import record_audit
 from ...models.care import Appointment, Practitioner, QueueCounter, QueueEntry
 from ...models.identity import Patient, Person, UserAccount
@@ -221,6 +225,8 @@ async def create_walk_in(
         reason_text=payload.reason_text,
     )
     db.add(entry)
+    await db.flush()
+    await emit_queue_token_assigned(db, entry=entry, actor_user_id=account.id)
     await db.commit()
     await publish(make_event(
         "queue.changed", entity_id=entry.id, entity_version=None,
@@ -262,6 +268,7 @@ async def _transition(
     db: AsyncSession,
     called: bool = False,
     idempotent: bool = False,
+    after: Any | None = None,
 ) -> QueueEntry:
     entry = await db.scalar(
         select(QueueEntry).where(QueueEntry.id == queue_entry_uuid).with_for_update()
@@ -290,6 +297,8 @@ async def _transition(
         facility_id=entry.facility_id,
         patient_id=entry.patient_id,
     )
+    if after is not None:
+        await after(entry)
     await db.commit()
     entry._queue_write_committed = True
     return entry
@@ -301,9 +310,12 @@ async def call_queue_entry(
     account: Annotated[UserAccount, Depends(get_current_identity_account)],
     db: Annotated[AsyncSession, Depends(async_get_db)],
 ) -> dict[str, Any]:
+    async def _emit_ready(entry: QueueEntry) -> None:
+        await emit_queue_ready(db, entry=entry, actor_user_id=account.id)
+
     entry = await _transition(
         queue_entry_uuid, {"waiting", "skipped"}, "called", account, db,
-        called=True, idempotent=True,
+        called=True, idempotent=True, after=_emit_ready,
     )
     if entry._queue_write_committed:
         await publish(make_event(
@@ -377,6 +389,8 @@ async def check_in(
     old_appointment_status = appointment.status
     appointment.status = "checked_in"
     appointment.version += 1
+    await db.flush()
+    await emit_queue_token_assigned(db, entry=entry, actor_user_id=account.id)
     await db.commit()
     await publish(make_event(
         "appointment.status_changed", entity_id=appointment.id, entity_version=appointment.version,

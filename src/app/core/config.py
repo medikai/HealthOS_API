@@ -164,6 +164,90 @@ class PatientDocumentSettings(BaseSettings):
     GCS_SIGNING_SERVICE_ACCOUNT: str | None = None
 
 
+class CommunicationSettings(BaseSettings):
+    """Durable delivery/job worker configuration for the communication domain."""
+
+    COMMUNICATION_ENABLED: bool = True
+    COMMUNICATION_WORKER_BATCH_SIZE: int = 25
+    COMMUNICATION_WORKER_POLL_SECONDS: float = 2.0
+    COMMUNICATION_WORKER_MAINTENANCE_EVERY_PASSES: int = 60
+    COMMUNICATION_JOB_LEASE_SECONDS: int = 60
+    COMMUNICATION_JOB_MAX_ATTEMPTS: int = 5
+    COMMUNICATION_JOB_BASE_BACKOFF_SECONDS: int = 5
+    COMMUNICATION_JOB_MAX_BACKOFF_SECONDS: int = 300
+    COMMUNICATION_JOB_RETENTION_DAYS: int = 30
+    COMMUNICATION_DEV_INPROCESS_DISPATCH: bool = False
+    COMMUNICATION_MAX_PRESENCE_CHANNELS: int = 10
+    COMMUNICATION_CHAT_MAX_GROUP_MEMBERS: int = 20
+    COMMUNICATION_CHAT_MAX_MESSAGE_LENGTH: int = 4000
+    COMMUNICATION_CHAT_HISTORY_PAGE_SIZE: int = 50
+    COMMUNICATION_CHAT_NOTIFY_DEBOUNCE_SECONDS: int = 300
+    # App-level key protecting short-lived secret email context (OTP/reset URLs).
+    # Falls back to SECRET_KEY derivation when unset.
+    COMMUNICATION_SECRET_CONTEXT_KEY: SecretStr | None = None
+
+
+class FirebaseSettings(BaseSettings):
+    """Backend-only FCM server configuration.
+
+    Missing project/credentials means push is unavailable (never a dummy send);
+    the SDK is imported lazily so absence does not break unrelated APIs. The
+    public web config/VAPID key are frontend settings, not these values.
+    """
+
+    FCM_ENABLED: bool = True
+    FIREBASE_PROJECT_ID: str | None = None
+    # Path to a service-account JSON file (server-only). Preferred over inline
+    # credentials; never committed and never logged.
+    FIREBASE_SERVICE_ACCOUNT_FILE: str | None = None
+    FIREBASE_CREDENTIALS_JSON: SecretStr | None = None
+    FCM_DEFAULT_TTL_SECONDS: int = 3600
+
+
+class RecoverySettings(BaseSettings):
+    """Local-auth password recovery policy and limits (auth-owned)."""
+
+    AUTH_RECOVERY_CODE_TTL_SECONDS: int = 600
+    AUTH_RECOVERY_RESEND_COOLDOWN_SECONDS: int = 60
+    AUTH_RECOVERY_MAX_ATTEMPTS: int = 5
+    AUTH_RECOVERY_ACCOUNT_LIMIT: int = 5
+    AUTH_RECOVERY_IP_LIMIT: int = 20
+    AUTH_RECOVERY_THROTTLE_WINDOW_SECONDS: int = 3600
+    AUTH_RECOVERY_GRANT_TTL_SECONDS: int = 600
+    AUTH_RECOVERY_CODE_LENGTH: int = 6
+    # Keyed verifier pepper; falls back to SECRET_KEY derivation when unset.
+    AUTH_RECOVERY_PEPPER: SecretStr | None = None
+
+
+class ZeptoMailSettings(BaseSettings):
+    """Backend-only ZeptoMail transport configuration.
+
+    A missing ``ZEPTOMAIL_SEND_TOKEN`` means email is unavailable, never a
+    dummy-success send.
+    """
+
+    ZEPTOMAIL_API_BASE_URL: str = "https://api.zeptomail.com"
+    ZEPTOMAIL_SEND_TOKEN: SecretStr | None = None
+    EMAIL_FROM_ADDRESS: str = "noreply@medikai.in"
+    EMAIL_FROM_NAME: str = "Medikai Infodesk"
+    EMAIL_TIMEOUT_SECONDS: float = 10.0
+    EMAIL_MAX_ATTEMPTS: int = 5
+
+
+class AblySettings(BaseSettings):
+    """Backend-only Ably credentials and scoped client-token policy.
+
+    The server API key must never be exposed to the browser; only signed,
+    short-lived token requests or token details are returned.
+    """
+
+    ABLY_API_KEY: SecretStr | None = None
+    ABLY_CHANNEL_NAMESPACE: str = "dev"
+    ABLY_TOKEN_TTL_SECONDS: int = 1800
+    ABLY_TOKEN_RENEW_AFTER_SECONDS: int = 900
+    ABLY_PRESENCE_ENABLED: bool = True
+
+
 class Settings(
     AppSettings,
     PostgresSettings,
@@ -178,6 +262,11 @@ class Settings(
     EnvironmentSettings,
     CORSSettings,
     PatientDocumentSettings,
+    CommunicationSettings,
+    AblySettings,
+    ZeptoMailSettings,
+    RecoverySettings,
+    FirebaseSettings,
     FileLoggerSettings,
     ConsoleLoggerSettings,
 ):

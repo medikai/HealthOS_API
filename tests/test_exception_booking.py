@@ -41,6 +41,7 @@ class ExceptionBookingTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch("src.app.api.v1.scheduling._scope", AsyncMock()), \
              patch("src.app.api.v1.scheduling.validate_interval", AsyncMock(return_value=UUID(int=61))), \
+             patch("src.app.api.v1.scheduling.emit_appointment_same_day_rescheduled", AsyncMock()), \
              patch("src.app.api.v1.scheduling.record_audit", AsyncMock()) as audit:
             response = await reschedule_appointment(payload=payload, appointment_uuid=appointment.id, account=SimpleNamespace(id=UUID(int=70)), db=db)
 
@@ -94,6 +95,7 @@ class ExceptionBookingTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch("src.app.api.v1.scheduling._scope", AsyncMock()), \
              patch("src.app.api.v1.scheduling.validate_interval", AsyncMock(return_value=None)), \
+             patch("src.app.api.v1.scheduling.emit_appointment_same_day_rescheduled", AsyncMock()), \
              patch("src.app.api.v1.scheduling.record_audit", AsyncMock()):
             with self.assertRaises(Exception):
                 await reschedule_appointment(payload=payload, appointment_uuid=appointment.id, account=SimpleNamespace(id=UUID(int=70)), db=db)

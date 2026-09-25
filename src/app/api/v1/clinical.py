@@ -9,6 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
 from ...core.events import make_event, publish
+from ...domains.communication.notifications.recipients import practitioner_staff_ids
+from ...domains.communication.notifications.workflow import (
+    emit_consultation_completed,
+)
+from ...domains.communication.status.service import work_status_service
 from ...domains.governance.audit import record_audit
 from ...models.care import (
     Appointment,
@@ -435,6 +440,21 @@ async def complete_encounter(encounter_uuid: UUID, account: Annotated[UserAccoun
             old_appointment_status = appointment.status
             appointment.version += 1
             appointment.status = "completed"
+    if encounter.practitioner_id:
+        for staff_id in await practitioner_staff_ids(
+            db,
+            organization_id=encounter.organization_id,
+            practitioner_id=encounter.practitioner_id,
+        ):
+            await work_status_service.apply_derived_status(
+                db,
+                organization_id=encounter.organization_id,
+                facility_id=encounter.facility_id,
+                staff_member_id=staff_id,
+                work_state="available",
+            )
+    await db.flush()
+    await emit_consultation_completed(db, encounter=encounter, actor_user_id=account.id)
     await db.commit()
     if encounter.appointment_id and appointment:
         await publish(make_event(
