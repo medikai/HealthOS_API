@@ -11,7 +11,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ....models.care import Appointment, QueueEntry
-from ....models.communication import NotificationEvent, NotificationRecipient
+from ....models.communication import (
+    Conversation,
+    ConversationMember,
+    NotificationEvent,
+    NotificationRecipient,
+)
 from ....models.organization import Facility, StaffAssignment, StaffMember
 from .constants import (
     CATEGORY_CATALOG,
@@ -338,22 +343,49 @@ class NotificationService:
         """
         if event.superseded_by_id is not None:
             return "superseded"
-        eligible = await db.scalar(
-            select(StaffMember.id)
-            .join(StaffAssignment, StaffAssignment.staff_member_id == StaffMember.id)
-            .where(
-                StaffMember.id == recipient.staff_member_id,
-                StaffMember.is_active.is_(True),
-                StaffAssignment.is_active.is_(True),
-                or_(
-                    StaffAssignment.facility_id == event.facility_id,
-                    StaffAssignment.role_code.in_(ADMIN_ROLES),
-                ),
+        if event.resource_type == "conversation" and event.resource_id:
+            # Chat attention is authorized by current conversation membership,
+            # not facility assignment: a direct conversation may have no
+            # facility, and removed members must not receive future state.
+            member = await db.scalar(
+                select(ConversationMember.staff_member_id)
+                .join(
+                    Conversation,
+                    Conversation.id == ConversationMember.conversation_id,
+                )
+                .join(
+                    StaffMember,
+                    StaffMember.id == ConversationMember.staff_member_id,
+                )
+                .where(
+                    ConversationMember.conversation_id == _parse_uuid(event.resource_id),
+                    ConversationMember.staff_member_id == recipient.staff_member_id,
+                    ConversationMember.left_at.is_(None),
+                    Conversation.organization_id == event.organization_id,
+                    Conversation.is_active.is_(True),
+                    StaffMember.is_active.is_(True),
+                )
+                .limit(1)
             )
-            .limit(1)
-        )
-        if eligible is None:
-            return "ineligible"
+            if member is None:
+                return "ineligible"
+        else:
+            eligible = await db.scalar(
+                select(StaffMember.id)
+                .join(StaffAssignment, StaffAssignment.staff_member_id == StaffMember.id)
+                .where(
+                    StaffMember.id == recipient.staff_member_id,
+                    StaffMember.is_active.is_(True),
+                    StaffAssignment.is_active.is_(True),
+                    or_(
+                        StaffAssignment.facility_id == event.facility_id,
+                        StaffAssignment.role_code.in_(ADMIN_ROLES),
+                    ),
+                )
+                .limit(1)
+            )
+            if eligible is None:
+                return "ineligible"
         if event.task_type == "queue_entry" and event.task_id:
             queue_status = await db.scalar(
                 select(QueueEntry.status).where(QueueEntry.id == _parse_uuid(event.task_id))

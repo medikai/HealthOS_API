@@ -52,6 +52,7 @@ def notification_item(
         "category": event.category,
         "priority": event.priority,
         "kind": event.kind,
+        "eventType": event.event_type,
         "title": event.title,
         "context": event.context,
         "actor": (
@@ -72,6 +73,13 @@ def notification_item(
         "taskRef": (
             {"type": event.task_type, "id": event.task_id}
             if event.task_id
+            else None
+        ),
+        # Authorized cross-transport correlation (for chat, the coalescing
+        # conversation). Never exposes clinical content, only the target id.
+        "correlation": (
+            {"type": event.resource_type, "id": event.resource_id}
+            if event.resource_type and event.resource_id
             else None
         ),
         "action": (

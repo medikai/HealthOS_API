@@ -5,7 +5,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from uuid6 import uuid7
 
 from ....models.communication import WorkStatus
 
@@ -48,7 +47,6 @@ class WorkStatusRepository:
         )
         if status_row is None:
             status_row = WorkStatus(
-                id=uuid7(),
                 organization_id=organization_id,
                 facility_id=facility_id,
                 staff_member_id=staff_member_id,

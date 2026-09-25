@@ -436,6 +436,8 @@ class ChatService:
             context=sender_name,
             task_type=None,
             task_state="none",
+            action_kind="open",
+            action_label="Open conversation",
             resource_type="conversation",
             resource_id=str(conversation.id),
             coalesce_key=f"conversation:{conversation.id}",
