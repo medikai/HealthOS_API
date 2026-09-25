@@ -69,7 +69,22 @@ def event_envelope_schema() -> dict:
             "organization_id": {"type": ["string", "null"]},
             "facility_id": {"type": ["string", "null"]},
             "recipient_staff_id": {"type": ["string", "null"]},
-            "data": {"type": "object", "description": "Minimal, non-secret metadata only."},
+            "data": {
+                "type": "object",
+                "description": "Minimal, non-secret metadata only.",
+                "examples": [
+                    {
+                        "notification_id": "uuid",
+                        "priority": "P2",
+                        "category": "messages",
+                        "kind": "update",
+                        "task_state": "none",
+                        "correlation_type": "conversation",
+                        "correlation_id": "uuid",
+                    },
+                    {"conversation_id": "uuid", "message_id": "uuid"},
+                ],
+            },
         },
         "additionalProperties": False,
     }

@@ -152,6 +152,8 @@ class RealtimeNotificationProvider:
                     "category": event.category,
                     "kind": event.kind,
                     "task_state": event.task_state,
+                    "correlation_type": event.resource_type,
+                    "correlation_id": str(event.resource_id) if event.resource_id else None,
                 },
             )
 
