@@ -1,0 +1,36 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - asia-south1-docker.pkg.dev/storied-shell-510407-e0/healthos/healthos-api:$COMMIT_SHA
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - asia-south1-docker.pkg.dev/storied-shell-510407-e0/healthos/healthos-api:$COMMIT_SHA
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - healthos-api
+      - --image=asia-south1-docker.pkg.dev/storied-shell-510407-e0/healthos/healthos-api:$COMMIT_SHA
+      - --project=storied-shell-510407-e0
+      - --region=asia-south1
+      - --platform=managed
+      - --service-account=healthos-cloud-run@storied-shell-510407-e0.iam.gserviceaccount.com
+      - --port=8080
+      - --cpu=1
+      - --memory=1Gi
+      - --min-instances=0
+      - --max-instances=10
+      - --set-env-vars=ENVIRONMENT=production,CRUD_ADMIN_ENABLED=false,AUTH_COOKIE_SECURE=true
+
+images:
+  - asia-south1-docker.pkg.dev/storied-shell-510407-e0/healthos/healthos-api:$COMMIT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY

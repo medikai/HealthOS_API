@@ -1,0 +1,16 @@
+.git
+.gitignore
+.DS_Store
+.venv
+__pycache__/
+*.py[cod]
+*.db
+*.dump
+.env
+src/.env
+tests/
+docs/
+scripts/
+backup.dump
+cloudbuild.yaml
+docker-compose.yml
