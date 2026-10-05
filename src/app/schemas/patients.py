@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -10,6 +11,7 @@ class PatientCreate(BaseModel):
     email: str | None = Field(default=None, max_length=320)
     date_of_birth: str | None = None
     gender: str | None = None
+    salutation_id: UUID | None = None
     person: "PatientCreate | None" = None
 
     @model_validator(mode="before")

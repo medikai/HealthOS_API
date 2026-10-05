@@ -19,6 +19,7 @@ from ...core.timezones import (
     to_timezone,
 )
 from ...domains.governance.audit import record_audit
+from ...domains.identity.salutations import resolve_active_salutation
 from ...models.care import (
     Appointment,
     Diagnosis,
@@ -60,6 +61,7 @@ def _item(patient: Patient, person: Person) -> dict[str, Any]:
         "email": person.email,
         "date_of_birth": person.date_of_birth,
         "gender": person.gender,
+        "salutation_id": str(person.salutation_id) if getattr(person, "salutation_id", None) else None,
         "status": "active" if patient.is_active else "inactive",
     }
 
@@ -867,6 +869,7 @@ async def create_patient(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A patient with this phone already exists.",
             )
+    salutation = await resolve_active_salutation(db, normalized.salutation_id)
     person = Person(
         organization_id=organization.id,
         first_name=normalized.first_name,
@@ -875,6 +878,7 @@ async def create_patient(
         email=normalized.email,
         date_of_birth=normalized.date_of_birth,
         gender=normalized.gender,
+        salutation_id=salutation.id if salutation else None,
     )
     db.add(person)
     await db.flush()
@@ -962,6 +966,9 @@ async def update_patient(
         normalized.date_of_birth,
         normalized.gender,
     )
+    if "salutation_id" in normalized.model_fields_set:
+        salutation = await resolve_active_salutation(db, normalized.salutation_id)
+        person.salutation_id = salutation.id if salutation else None
     await record_audit(
         db,
         organization_id=organization.id,

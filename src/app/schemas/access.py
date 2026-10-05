@@ -23,6 +23,7 @@ class OrganizationCreate(FacilityAddress):
     specialty_id: uuid.UUID | None = None
     medical_council_id: uuid.UUID | None = None
     medical_council_reg_no: str | None = Field(default=None, max_length=100)
+    salutation_id: uuid.UUID | None = None
 
     @model_validator(mode="before")
     @classmethod

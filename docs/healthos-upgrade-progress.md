@@ -172,3 +172,76 @@
 ### 4. Verification
 - 14 focused unit tests in `tests/test_practitioner_schedules.py` + 74 full suite tests passing.
 - Verified: dynamic facility inheritance, doctor own-vs-other permission barrier, optimistic locking stale version rejection, break containment and overlap rules, overnight interval rejection, and history-preserving reset.
+
+## Task: BE01 — Salutation Identity Support (2026-09-29)
+
+### Status
+VERIFIED on the configured `ENVIRONMENT=local` database (`neondb`). Next step: FE01 Phase B.
+
+### Migration
+- Revision `20260929_41` (`src/migrations/versions/20260929_41_add_salutation_master.py`, revises `20260925_40`); single Alembic head. Rollback/downgrade implemented.
+- Applied to the configured local database: `cd src && ../venv/bin/alembic upgrade head` → `20260925_40` → `20260929_41`. Verified via `alembic current` and `information_schema` (table, nullable columns, FKs); `identity.person` retained all 124 existing rows.
+- New `identity.salutation` (`id`, `code UNIQUE`, `display_name`, `abbreviation`, `sort_order`, `is_active`, `created_at`, `updated_at`). `identity.person.salutation_id` nullable FK → `identity.salutation.id` (ON DELETE SET NULL). Link added to `identity.user_account.person_id` nullable FK → `identity.person.id` (staff/doctor person read-back). `identity.practitioner` unchanged.
+
+### Seed
+- Migration-based reference seed (matches the existing medical-council pattern) plus re-runnable `scripts/seed_salutations.py`; both keyed on stable `code`.
+- Seeded codes: DR/Doctor/Dr./10, MR/Mister/Mr./20, MS/Ms/Ms./30, MRS/Mrs/Mrs./40, MX/Mx/Mx./50, PROF/Professor/Prof./60, `is_active=true`. Deterministic UUIDs `uuid5("healthos:salutation:<code>")`.
+- Idempotency verified: `python -m scripts.seed_salutations` run twice → "inserted: 0" each time; DB count 6, duplicate codes 0.
+
+### Contract
+- `GET /api/v1/masters/salutations` (public, no auth; optional `is_active=true`), envelope `{success,data:{items:[{id,uuid,code,display_name,abbreviation,sort_order,is_active}]},meta:{count}}`, ordered `sort_order ASC, code ASC`; static fallback list on DB error.
+- `POST /api/v1/organizations` accepts optional `salutation_id`; `POST /api/v1/staff/invitations` accepts/stores optional `salutation_id` and `accept` persists it; `POST/PATCH /api/v1/patients` accept optional `salutation_id` on the person.
+- Persistence: `identity.person.salutation_id`. Person/legal name is never auto-prefixed or stripped; salutation is never derived from role/profession/designation/specialty/gender/name.
+- Validation: omitted/null accepted; malformed UUID → 422 `VALIDATION_ERROR`; nonexistent/inactive → 422 with `"Salutation does not exist or is inactive."`.
+
+### Files
+`src/app/models/{identity,organization,__init__}.py`, `src/app/domains/identity/{__init__,salutations}.py` (new), `src/app/domains/organization/service.py`, `src/app/api/v1/{masters,organizations,staff,patients}.py`, `src/app/schemas/{access,staff,patients}.py`, `src/migrations/versions/20260929_41_add_salutation_master.py` (new), `scripts/seed_salutations.py` (new), `tests/test_salutation.py` (new).
+
+### Tests
+- `python -m pytest -q tests/test_salutation.py tests/test_masters.py tests/test_staff_invitation.py tests/test_patient_schema.py` → 41 passed.
+- Full suite (`--ignore=tests/test_user.py`, pre-existing collection error): 319 passed, 5 skipped, 5 failed — all 5 are pre-existing `appointment.version` SimpleNamespace failures in `test_encounter_resume.py`/`test_walk_ins.py`, unrelated to salutation.
+- Migration offline render (`alembic upgrade 20260925_40:20260929_41 --sql`) rendered the DDL and seed inserts (offline binds show NULL, expected). Ruff clean on new files; remaining repo lint warnings pre-existing.
+- Legacy prefixed names (e.g. "Dr. Vikram Sen") left untouched; no automatic normalization or inference.
+
+### Handoff
+BE -> FE handoff written to `/Users/ganeshsawant/Documents/work/healthos/handoffs/BE01_SALUTATION_BE_TO_FE.md`. Do not mark FE01 Phase B complete.
+
+## Hotfix: staff_invitation.salutation_id missing (2026-09-29)
+
+### Problem
+`POST /api/v1/staff/invitations` raised `UndefinedColumnError: column "salutation_id" of relation "staff_invitation" does not exist` (`src/app/api/v1/staff.py:362`). BE01 declared the model/schema/API support but migration `20260929_41` only added `salutation_id` to `identity.person`, never to `organization.staff_invitation`. The frontend was already correct (`InviteStaffDrawer.tsx` fetches `GET /masters/salutations` and posts `salutation_id`), so no FE change was required.
+
+### Migration
+- Revision `20260929_42` (`src/migrations/versions/20260929_42_add_staff_invitation_salutation.py`, revises `20260929_41`); single Alembic head, downgrade implemented.
+- Adds nullable `organization.staff_invitation.salutation_id UUID`, FK `fk_organization_staff_invitation_salutation` → `identity.salutation.id` (ON DELETE SET NULL), index `ix_organization_staff_invitation_salutation_id`.
+- Applied to configured local Neon DB: `cd src && ../venv/bin/alembic upgrade head` → `20260929_41` → `20260929_42`. Verified via `alembic current` and `information_schema`/`pg_constraint`/`pg_indexes`. No backfill needed: pre-existing invitations stay NULL (salutation was never captured for them).
+
+## Hotfix: production CORS origin missing (2026-10-05)
+
+### Root cause
+- Production frontend moved to `https://healthos.medikai.in`, but the effective `CORS_ORIGINS` did not include it, so Cloud Run `CORSMiddleware` answered the preflight with `400 Disallowed CORS origin`. The allow-methods/headers/credentials in that 400 response match the code defaults, and no `.env` ships in the image, so the service was relying on defaults (or a stale env value).
+- The `CORS_ORIGINS` list field was JSON-decoded by pydantic-settings: a comma-separated or bare value would raise `SettingsError` at startup, while trailing slashes, whitespace, or quotes parsed but could never match the browser `Origin` header.
+
+### Files changed
+- `src/app/core/config.py`: `CORS_ORIGINS` now defaults to localhost origins plus `https://healthos.medikai.in`; field uses `NoDecode` with a before-validator that accepts JSON arrays, comma-separated strings, or a single origin, and normalizes whitespace/quotes/trailing slashes and de-duplicates. `CORS_METHODS`, `CORS_HEADERS`, and `allow_credentials=True` unchanged.
+- `.env.example`: documented production sample now includes the production origin and localhost, with a note that origins take no trailing slash.
+- `tests/test_cors.py` (new).
+
+### Tests performed
+- `./venv/bin/python -m pytest -q tests/test_cors.py` → 6 passed: defaults include production/localhost; JSON, comma-separated, and single-origin env values parse; `OPTIONS /api/v1/auth/login` from `https://healthos.medikai.in` returns 200 with matching `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true`; `https://evil.example.com` returns 400 with no allow-origin.
+- End-to-end local reproduction with `create_application` + default settings confirmed 200 for the production origin and 400 for the evil origin; `test_client_cache_middleware.py` passed; Ruff clean on changed files.
+
+### Configuration / environment
+- Cloud Run uses no `.env` file; if the service already defines `CORS_ORIGINS`, it overrides the new default: set it to `["https://healthos.medikai.in","http://localhost:5173","http://127.0.0.1:5173"]`, preserving any other live origins. No LB, DNS, or frontend change.
+
+### Deployment requirement
+- New Cloud Run revision required (code default changed). Env update required only if `CORS_ORIGINS` is already defined on the service.
+
+### Verification command
+`curl -i -X OPTIONS 'https://api.medikai.in/api/v1/auth/login' -H 'Origin: https://healthos.medikai.in' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: content-type,authorization'` → expect `HTTP/2 200`, `access-control-allow-origin: https://healthos.medikai.in`, `access-control-allow-credentials: true`.
+
+### Handoff status
+- Backend hotfix complete and locally verified; live Cloud Run deploy and curl verification pending.
+
+### Next step
+- Deploy the revision, apply the `CORS_ORIGINS` value if the variable is already set, run the verification curl, then confirm frontend login preflight succeeds.

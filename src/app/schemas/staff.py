@@ -31,6 +31,7 @@ class StaffInviteCreate(BaseModel):
     sub_specialty_id: UUID | None = None
     designation_id: UUID | None = None
     medical_council_reg_no: str | None = None
+    salutation_id: UUID | None = None
     has_prescription_authority: bool = True
 
 

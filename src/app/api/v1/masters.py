@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
-from ...models.identity import UserAccount
+from ...domains.identity.salutations import SALUTATIONS, salutation_uuid
+from ...models.identity import Salutation, UserAccount
 from ...models.masters import (
     City,
     Country,
@@ -147,10 +148,53 @@ MEDICAL_COUNCILS = [
     ("ukmc", "Uttarakhand Medical Council", "UK"),
     ("wbmc", "West Bengal Medical Council", "WB"),
 ]
+FALLBACK_SALUTATIONS = [
+    {
+        "id": str(salutation_uuid(str(row["code"]))),
+        "uuid": str(salutation_uuid(str(row["code"]))),
+        "code": row["code"],
+        "display_name": row["display_name"],
+        "abbreviation": row["abbreviation"],
+        "sort_order": row["sort_order"],
+        "is_active": True,
+    }
+    for row in SALUTATIONS
+]
 FALLBACK_MEDICAL_COUNCILS = [
     {"uuid": str(uuid5(NAMESPACE_URL, f"healthos:medical-council:{code}")), "code": code, "name": name, "state_code": state_code, "country_code": "IN", "is_active": True}
     for code, name, state_code in MEDICAL_COUNCILS
 ]
+
+
+def _salutation_item(row: Salutation) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "uuid": str(row.id),
+        "code": row.code,
+        "display_name": row.display_name,
+        "abbreviation": row.abbreviation,
+        "sort_order": row.sort_order,
+        "is_active": row.is_active,
+    }
+
+
+@router.get("/salutations")
+async def list_salutations(
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+    is_active: bool = True,
+) -> dict[str, Any]:
+    """List person salutation masters ordered for display (sort_order ASC)."""
+    try:
+        query = select(Salutation).order_by(Salutation.sort_order, Salutation.code)
+        if is_active:
+            query = query.where(Salutation.is_active.is_(True))
+        records = (await db.scalars(query)).all()
+        if records:
+            items = [_salutation_item(row) for row in records]
+            return {"success": True, "data": {"items": items}, "meta": {"count": len(items)}}
+    except Exception:
+        pass
+    return {"success": True, "data": {"items": FALLBACK_SALUTATIONS}, "meta": {"count": len(FALLBACK_SALUTATIONS)}}
 
 
 @router.get("/countries")
