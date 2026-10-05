@@ -27,6 +27,7 @@ async def create_organization(
         specialty_id=payload.specialty_id,
         medical_council_id=payload.medical_council_id,
         medical_council_reg_no=payload.medical_council_reg_no,
+        salutation_id=payload.salutation_id,
         clinic_name=payload.clinic_name,
         classification=payload.classification,
         street_address=payload.street_address,

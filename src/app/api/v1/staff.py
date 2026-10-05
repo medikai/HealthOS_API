@@ -14,8 +14,9 @@ from ...core.db.database import async_get_db
 from ...core.security import create_access_token, get_password_hash
 from ...domains.auth.logto import logto_oidc_client
 from ...domains.governance.audit import record_audit
+from ...domains.identity.salutations import resolve_active_salutation
 from ...models.care import Practitioner, PractitionerAvailabilityRule
-from ...models.identity import UserAccount
+from ...models.identity import Person, Salutation, UserAccount
 from ...models.masters import Specialty, StaffDesignation, SubSpecialty
 from ...models.organization import (
     Facility,
@@ -40,6 +41,14 @@ admin_router = APIRouter(prefix="/admin/staff", tags=["admin-staff"])
 staff_router = APIRouter(prefix="/staff", tags=["staff"])
 
 
+def _split_person_name(name: str | None) -> tuple[str, str | None]:
+    cleaned = " ".join((name or "").split())
+    if not cleaned:
+        return "Staff Member", None
+    parts = cleaned.split(" ", 1)
+    return parts[0][:100], (parts[1][:100] if len(parts) > 1 else None)
+
+
 async def _admin(db: AsyncSession, account: UserAccount) -> tuple[StaffMember, Organization]:
     staff, organization = await _staff_context(db, account)
     role = await db.scalar(select(StaffAssignment).where(StaffAssignment.staff_member_id == staff.id, StaffAssignment.role_code.in_(["organization_admin", "owner", "administrator"]), StaffAssignment.is_active.is_(True)))
@@ -56,6 +65,7 @@ def _item(
     specialty_name: str | None = None,
     sub_specialty_name: str | None = None,
     designation_name: str | None = None,
+    salutation: Salutation | None = None,
 ) -> dict[str, Any]:
     role_codes = sorted({a.role_code for a in assignments})
     facility_uuids = [str(a.facility_id) for a in assignments if a.facility_id]
@@ -96,6 +106,10 @@ def _item(
         "medical_council_reg_no": practitioner.medical_council_reg_no if practitioner else None,
         "has_prescription_authority": practitioner.has_prescription_authority if practitioner else False,
         "prescription_authority_status": practitioner.prescription_authority_status if practitioner else "none",
+        "salutation_id": str(salutation.id) if salutation else None,
+        "salutation_code": salutation.code if salutation else None,
+        "salutation_display_name": salutation.display_name if salutation else None,
+        "salutation_abbreviation": salutation.abbreviation if salutation else None,
     }
 
 
@@ -118,6 +132,7 @@ async def list_staff(
             Specialty.name.label("specialty_name"),
             SubSpecialty.name.label("sub_specialty_name"),
             StaffDesignation.name.label("designation_name"),
+            Salutation,
         )
         .join(UserAccount, UserAccount.id == StaffMember.user_account_id)
         .outerjoin(
@@ -131,6 +146,8 @@ async def list_staff(
         .outerjoin(Specialty, Specialty.id == Practitioner.specialty_id)
         .outerjoin(SubSpecialty, SubSpecialty.id == Practitioner.sub_specialty_id)
         .outerjoin(StaffDesignation, StaffDesignation.id == Practitioner.designation_id)
+        .outerjoin(Person, Person.id == UserAccount.person_id)
+        .outerjoin(Salutation, Salutation.id == Person.salutation_id)
         .where(StaffMember.organization_id == organization.id)
     )
     if status == "active":
@@ -145,7 +162,7 @@ async def list_staff(
         )
     rows = (await db.execute(query)).all()
     items = []
-    for member, user, practitioner, spec_name, sub_spec_name, desig_name in rows:
+    for member, user, practitioner, spec_name, sub_spec_name, desig_name, salutation in rows:
         assignments = (
             await db.scalars(
                 select(StaffAssignment).where(
@@ -159,7 +176,7 @@ async def list_staff(
             is_org_admin = any(a.role_code in ["organization_admin", "owner", "administrator"] for a in assignments)
             if not has_facility and not is_org_admin:
                 continue
-        items.append(_item(member, user, assignments, practitioner, spec_name, sub_spec_name, desig_name))
+        items.append(_item(member, user, assignments, practitioner, spec_name, sub_spec_name, desig_name, salutation))
     return {"success": True, "data": {"items": items}, "meta": {"count": len(items)}}
 
 
@@ -314,6 +331,8 @@ async def create_invitation(
         if fac:
             target_facility_id = fac.id
 
+    salutation = await resolve_active_salutation(db, payload.salutation_id)
+
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(UTC) + timedelta(days=7)
     invite = StaffInvitation(
@@ -326,6 +345,7 @@ async def create_invitation(
         sub_specialty_id=payload.sub_specialty_id,
         designation_id=payload.designation_id,
         medical_council_reg_no=payload.medical_council_reg_no,
+        salutation_id=salutation.id if salutation else None,
         token=token,
         expires_at=expires_at,
         status="pending",
@@ -352,6 +372,7 @@ async def create_invitation(
             "sub_specialty_id": str(invite.sub_specialty_id) if invite.sub_specialty_id else None,
             "designation_id": str(invite.designation_id) if invite.designation_id else None,
             "medical_council_reg_no": invite.medical_council_reg_no,
+            "salutation_id": str(invite.salutation_id) if invite.salutation_id else None,
             "facility_uuid": str(invite.facility_id) if invite.facility_id else None,
             "token": invite.token,
             "expires_at": invite.expires_at.isoformat(),
@@ -387,6 +408,7 @@ async def list_invitations(
             "sub_specialty_id": str(inv.sub_specialty_id) if inv.sub_specialty_id else None,
             "designation_id": str(inv.designation_id) if inv.designation_id else None,
             "medical_council_reg_no": inv.medical_council_reg_no,
+            "salutation_id": str(inv.salutation_id) if inv.salutation_id else None,
             "facility_uuid": str(inv.facility_id) if inv.facility_id else None,
             "status": inv.status,
             "token": inv.token,
@@ -429,6 +451,7 @@ async def validate_invitation(
             "sub_specialty_id": str(invite.sub_specialty_id) if invite.sub_specialty_id else None,
             "designation_id": str(invite.designation_id) if invite.designation_id else None,
             "medical_council_reg_no": invite.medical_council_reg_no,
+            "salutation_id": str(invite.salutation_id) if invite.salutation_id else None,
             "organization_name": org.name if org else "Clinic",
             "organization_id": str(org.id) if org else None,
             "facility_name": fac.name if fac else None,
@@ -473,6 +496,21 @@ async def accept_invitation(
             account.display_name = payload.full_name
         account.is_active = True
         await db.flush()
+
+    person = await db.get(Person, account.person_id) if account.person_id else None
+    if person is None:
+        first_name, last_name = _split_person_name(payload.full_name or invite.full_name or account.display_name)
+        person = Person(
+            organization_id=invite.organization_id,
+            first_name=first_name,
+            last_name=last_name,
+            salutation_id=invite.salutation_id,
+        )
+        db.add(person)
+        await db.flush()
+        account.person_id = person.id
+    elif invite.salutation_id is not None:
+        person.salutation_id = invite.salutation_id
 
     member = await db.scalar(
         select(StaffMember).where(
@@ -597,6 +635,7 @@ async def accept_invitation(
                 "email": account.email,
                 "display_name": account.display_name,
                 "role_code": invite.role_code,
+                "salutation_id": str(person.salutation_id) if person.salutation_id else None,
             },
         },
         "meta": {},

@@ -18,6 +18,28 @@ from uuid6 import uuid7
 from ..core.db.database import Base
 
 
+class Salutation(Base):
+    """Person salutation master (e.g. Doctor, Mister, Ms).
+
+    Salutation is person identity, independent of profession, designation,
+    RBAC role or specialty.
+    """
+
+    __tablename__ = "salutation"
+    __table_args__ = {"schema": "identity"}
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(64))
+    abbreviation: Mapped[str] = mapped_column(String(16))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
 class UserAccount(Base):
     """HealthOS-owned profile mapped to an immutable Logto subject."""
 
@@ -38,6 +60,7 @@ class UserAccount(Base):
     registration_specialty_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.specialty.id"), default=None)
     registration_medical_council_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.medical_council.id"), default=None)
     registration_medical_council_reg_no: Mapped[str | None] = mapped_column(String(100), default=None)
+    person_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.person.id"), index=True, default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -84,6 +107,7 @@ class Person(Base):
     email: Mapped[str | None] = mapped_column(String(320), default=None)
     date_of_birth: Mapped[str | None] = mapped_column(String(10), default=None)
     gender: Mapped[str | None] = mapped_column(String(32), default=None)
+    salutation_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.salutation.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 

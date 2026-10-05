@@ -6,7 +6,7 @@ from .identity import (
     PasswordRecoveryThrottle,
     UserAccount,
 )
-from .identity import Patient, Person
+from .identity import Patient, Person, Salutation
 from .care import (
     Appointment, AppointmentBookingException, AuditLog, ClinicalDocumentationSetting, Encounter, Practitioner, PractitionerAvailabilityException,
     PractitionerAvailabilityRule, PractitionerSchedule, Prescription, PrescriptionItem, QueueCounter,

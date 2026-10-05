@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.availability import rules_from_facility_schedule
 from ...core.config import settings
 from ...domains.auth.logto import logto_oidc_client
-from ...models.identity import UserAccount
+from ...models.identity import Person, UserAccount
 from ...models.masters import City, Country, District, MedicalCouncil, Specialty, State
 from ...models.organization import (
     Department,
@@ -18,8 +18,17 @@ from ...models.organization import (
     StaffMember,
 )
 from ...models.platform import Feature, FeatureAssignment
+from ..identity.salutations import resolve_active_salutation
 
 VALID_ROLE_CODES = {"organization_admin", "practitioner", "nurse", "receptionist", "billing_staff"}
+
+
+def _split_person_name(name: str | None) -> tuple[str, str | None]:
+    cleaned = " ".join((name or "").split())
+    if not cleaned:
+        return "Doctor", None
+    parts = cleaned.split(" ", 1)
+    return parts[0][:100], (parts[1][:100] if len(parts) > 1 else None)
 
 
 class AccessService:
@@ -74,6 +83,7 @@ class AccessService:
         specialty_id: uuid.UUID | None = None,
         medical_council_id: uuid.UUID | None = None,
         medical_council_reg_no: str | None = None,
+        salutation_id: uuid.UUID | None = None,
         clinic_name: str | None = None,
         classification: str | None = None,
         street_address: str | None = None,
@@ -96,6 +106,7 @@ class AccessService:
             await logto_oidc_client.add_management_organization_member(logto_organization_id, account.logto_user_id)
             await logto_oidc_client.assign_management_organization_role(logto_organization_id, account.logto_user_id, role_id)
         await self._validate_location(db, country_id, state_id, district_id, city_id)
+        salutation = await resolve_active_salutation(db, salutation_id)
         organization = Organization(name=name, code=code, logto_organization_id=logto_organization_id)
         db.add(organization)
         await db.flush()
@@ -113,6 +124,21 @@ class AccessService:
         db.add(member)
         await db.flush()
         db.add(StaffAssignment(staff_member_id=member.id, facility_id=facility.id, role_code="organization_admin"))
+
+        person = await db.get(Person, account.person_id) if account.person_id else None
+        if person is None:
+            first_name, last_name = _split_person_name(account.display_name)
+            person = Person(
+                organization_id=organization.id,
+                first_name=first_name,
+                last_name=last_name,
+                salutation_id=salutation.id if salutation else None,
+            )
+            db.add(person)
+            await db.flush()
+            account.person_id = person.id
+        elif salutation is not None:
+            person.salutation_id = salutation.id
 
         from ...models.care import Practitioner
         resolved_specialty_id = specialty_id or getattr(account, "registration_specialty_id", None)

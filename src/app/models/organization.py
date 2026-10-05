@@ -166,6 +166,9 @@ class StaffInvitation(Base):
         ForeignKey("platform.staff_designation.id"), index=True, default=None
     )
     medical_council_reg_no: Mapped[str | None] = mapped_column(String(100), default=None)
+    salutation_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("identity.salutation.id"), index=True, default=None
+    )
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
