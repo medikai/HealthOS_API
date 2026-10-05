@@ -172,3 +172,33 @@
 ### 4. Verification
 - 14 focused unit tests in `tests/test_practitioner_schedules.py` + 74 full suite tests passing.
 - Verified: dynamic facility inheritance, doctor own-vs-other permission barrier, optimistic locking stale version rejection, break containment and overlap rules, overnight interval rejection, and history-preserving reset.
+
+## Hotfix: production CORS origin missing (2026-10-05)
+
+### Root cause
+- Production frontend moved to `https://healthos.medikai.in`, but the effective `CORS_ORIGINS` did not include it, so Cloud Run `CORSMiddleware` answered the preflight with `400 Disallowed CORS origin`. The allow-methods/headers/credentials in that 400 response match the code defaults, and no `.env` ships in the image, so the service was relying on defaults (or a stale env value).
+- The `CORS_ORIGINS` list field was JSON-decoded by pydantic-settings: a comma-separated or bare value would raise `SettingsError` at startup, while trailing slashes, whitespace, or quotes parsed but could never match the browser `Origin` header.
+
+### Files changed
+- `src/app/core/config.py`: `CORS_ORIGINS` now defaults to localhost origins plus `https://healthos.medikai.in`; field uses `NoDecode` with a before-validator that accepts JSON arrays, comma-separated strings, or a single origin, and normalizes whitespace/quotes/trailing slashes and de-duplicates. `CORS_METHODS`, `CORS_HEADERS`, and `allow_credentials=True` unchanged.
+- `.env.example`: documented production sample now includes the production origin and localhost, with a note that origins take no trailing slash.
+- `tests/test_cors.py` (new).
+
+### Tests performed
+- `./venv/bin/python -m pytest -q tests/test_cors.py` → 6 passed: defaults include production/localhost; JSON, comma-separated, and single-origin env values parse; `OPTIONS /api/v1/auth/login` from `https://healthos.medikai.in` returns 200 with matching `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true`; `https://evil.example.com` returns 400 with no allow-origin.
+- End-to-end local reproduction with `create_application` + default settings confirmed 200 for the production origin and 400 for the evil origin; `test_client_cache_middleware.py` passed; Ruff clean on changed files.
+
+### Configuration / environment
+- Cloud Run uses no `.env` file; if the service already defines `CORS_ORIGINS`, it overrides the new default: set it to `["https://healthos.medikai.in","http://localhost:5173","http://127.0.0.1:5173"]`, preserving any other live origins. No LB, DNS, or frontend change.
+
+### Deployment requirement
+- New Cloud Run revision required (code default changed). Env update required only if `CORS_ORIGINS` is already defined on the service.
+
+### Verification command
+`curl -i -X OPTIONS 'https://api.medikai.in/api/v1/auth/login' -H 'Origin: https://healthos.medikai.in' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: content-type,authorization'` → expect `HTTP/2 200`, `access-control-allow-origin: https://healthos.medikai.in`, `access-control-allow-credentials: true`.
+
+### Handoff status
+- Backend hotfix complete and locally verified; live Cloud Run deploy and curl verification pending.
+
+### Next step
+- Deploy the revision, apply the `CORS_ORIGINS` value if the variable is already set, run the verification curl, then confirm frontend login preflight succeeds.

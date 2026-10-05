@@ -1,8 +1,10 @@
+import json
 from enum import Enum
 from pathlib import Path
+from typing import Annotated
 
-from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 SRC_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = SRC_DIR / ".env"
@@ -147,7 +149,11 @@ class EnvironmentSettings(BaseSettings):
 
 
 class CORSSettings(BaseSettings):
-    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://healthos.medikai.in",
+    ]
     CORS_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     CORS_HEADERS: list[str] = [
         "Authorization",
@@ -157,6 +163,39 @@ class CORSSettings(BaseSettings):
         "X-Client-Date",
         "X-Client-Timestamp",
     ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def _normalize_cors_origins(cls, value: object) -> object:
+        """Parse and normalize allowed origins from JSON or comma-separated input.
+
+        Browsers send the origin as ``scheme://host[:port]`` with no trailing
+        slash, so configured values are trimmed, unquoted, and de-slashed to
+        avoid silent exact-match failures.
+        """
+        if isinstance(value, str):
+            raw = value.strip()
+            if raw.startswith("["):
+                try:
+                    value = json.loads(raw)
+                except json.JSONDecodeError:
+                    value = raw.strip("[]").split(",")
+            else:
+                value = raw.split(",")
+
+        if not isinstance(value, (list, tuple, set)):
+            return value
+
+        origins: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            origin = item.strip().strip("\"'").strip()
+            if origin.endswith("/"):
+                origin = origin.rstrip("/")
+            if origin and origin not in origins:
+                origins.append(origin)
+        return origins
 
 
 class PatientDocumentSettings(BaseSettings):
