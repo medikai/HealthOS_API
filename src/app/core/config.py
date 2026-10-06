@@ -148,10 +148,80 @@ class EnvironmentSettings(BaseSettings):
     ENVIRONMENT: EnvironmentOption
 
 
+class PatientPortalSettings(BaseSettings):
+    """Patient portal auth/session/OTP policy.
+
+    The patient session cookie is deliberately distinct from the staff
+    ``healthos_session`` cookie, and the OTP pepper falls back to SECRET_KEY.
+    The default OTP provider is the explicitly sandboxed development provider;
+    production must select a real vendor or ``unconfigured``.
+    """
+
+    PATIENT_SESSION_COOKIE_NAME: str = "healthos_patient_session"
+    PATIENT_SESSION_TTL_SECONDS: int = 2_592_000
+    PATIENT_COOKIE_SECURE: bool = True
+    PATIENT_COOKIE_SAMESITE: str = "lax"
+    # Scoped to the patient API namespace so the cookie is never sent to staff routes.
+    PATIENT_COOKIE_PATH: str = "/api/v1/patient"
+    PATIENT_CSRF_HEADER_NAME: str = "X-CSRF-Token"
+
+    PATIENT_OTP_CODE_TTL_SECONDS: int = 600
+    PATIENT_OTP_RESEND_COOLDOWN_SECONDS: int = 60
+    PATIENT_OTP_MAX_ATTEMPTS: int = 5
+    PATIENT_OTP_PHONE_LIMIT: int = 5
+    PATIENT_OTP_IP_LIMIT: int = 20
+    PATIENT_OTP_THROTTLE_WINDOW_SECONDS: int = 3600
+    PATIENT_OTP_CODE_LENGTH: int = 6
+    # Keyed verifier pepper; falls back to SECRET_KEY derivation when unset.
+    PATIENT_OTP_PEPPER: SecretStr | None = None
+
+    # ``dev`` is an allowlisted synthetic provider; ``unconfigured`` performs no
+    # delivery. Neither sends real SMS. A real vendor adapter must be added
+    # before any live delivery claim.
+    PATIENT_OTP_PROVIDER: str = "dev"
+    PATIENT_OTP_DEV_ALLOWLIST: Annotated[list[str], NoDecode] = []
+    # Local-only affordance: echo the generated code for allowlisted synthetic
+    # phones. Never enable outside local development.
+    PATIENT_OTP_DEV_EXPOSE_CODE: bool = False
+
+    PATIENT_LINK_INVITATION_TTL_HOURS: int = 168
+    PATIENT_LINK_INVITATION_MAX_TTL_HOURS: int = 720
+
+    @field_validator("PATIENT_OTP_DEV_ALLOWLIST", mode="before")
+    @classmethod
+    def _normalize_dev_allowlist(cls, value: object) -> object:
+        """Accept the documented JSON array or a comma-separated string.
+
+        Mirrors the CORS origin parsing so the value shown in `.env.example`
+        works without quoting surprises.
+        """
+        if isinstance(value, str):
+            raw = value.strip()
+            if raw.startswith("["):
+                try:
+                    value = json.loads(raw)
+                except json.JSONDecodeError:
+                    value = raw.strip("[]").split(",")
+            else:
+                value = raw.split(",")
+        if not isinstance(value, (list, tuple, set)):
+            return value
+        allowlist: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            phone = item.strip().strip("\"'").strip()
+            if phone and phone not in allowlist:
+                allowlist.append(phone)
+        return allowlist
+
+
 class CORSSettings(BaseSettings):
     CORS_ORIGINS: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
         "https://healthos.medikai.in",
     ]
     CORS_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -311,6 +381,7 @@ class Settings(
     AblySettings,
     ZeptoMailSettings,
     RecoverySettings,
+    PatientPortalSettings,
     FirebaseSettings,
     FileLoggerSettings,
     ConsoleLoggerSettings,

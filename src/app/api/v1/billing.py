@@ -28,6 +28,7 @@ from ...models.organization import (
     StaffMember,
 )
 from ...schemas.billing import ConsultationFeeInput, PaymentInput, RefundInput
+from ...schemas.patient_domain import InvoiceDiscountBody
 from .bootstrap import ADMIN_ROLES
 from .patients import _escape_like
 
@@ -981,5 +982,80 @@ async def void_refund(
     return {
         "success": True,
         "data": {"uuid": str(refund.id), "status": refund.status},
+        "meta": {},
+    }
+
+
+@router.post("/invoices/{invoice_uuid}/discounts")
+async def apply_invoice_discount(
+    invoice_uuid: UUID,
+    payload: InvoiceDiscountBody,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    """Staff-applied percentage or fixed consultation discount (snapshot).
+
+    Rejected once any captured payment exists (no retroactive edits). Net never
+    goes negative; gross/discount/net are recorded with actor and audit.
+    """
+    from ...domains.patient_portal import billing as portal_billing
+    from ...models.identity import PatientRecordLink
+
+    invoice = await db.scalar(
+        select(Invoice).where(Invoice.id == invoice_uuid).with_for_update()
+    )
+    if invoice is None:
+        raise _error(404, "NOT_FOUND", "Invoice not found.")
+    _, _, roles, _ = await _access(db, account, invoice.facility_id)
+    if not roles.intersection(BILLING_ROLES):
+        raise _error(403, "BILLING_ACCESS_REQUIRED", "Billing access is required.")
+    try:
+        invoice = await portal_billing.apply_discount(
+            db,
+            invoice=invoice,
+            actor_user_id=account.id,
+            kind=payload.kind,
+            bp=payload.value_bp,
+            fixed_minor=payload.amount_minor,
+            reason=payload.reason,
+        )
+    except portal_billing.InvalidDiscount as exc:
+        raise _error(422, exc.code, str(exc)) from exc
+    except portal_billing.BillingPortalError as exc:
+        raise _error(409, exc.code, str(exc)) from exc
+    link = await db.scalar(
+        select(PatientRecordLink).where(
+            PatientRecordLink.patient_id == invoice.patient_id,
+            PatientRecordLink.status == "verified",
+        )
+    )
+    if link is not None:
+        from ...domains.patient_portal.notifications import (
+            create_patient_notification,
+        )
+
+        await create_patient_notification(
+            db,
+            account_id=link.patient_account_id,
+            kind="bill_updated",
+            category="bills",
+            title="Bill updated",
+            body="A discount was applied to an outstanding bill.",
+            organization_id=invoice.organization_id,
+            facility_id=invoice.facility_id,
+            deep_link=f"/bills/{invoice.id}",
+            dedup_key=f"patient:invoice:{invoice.id}:discount:{invoice.discounted_at}",
+        )
+        await db.commit()
+    return {
+        "success": True,
+        "data": {
+            "uuid": str(invoice.id),
+            "gross_amount_minor": invoice.gross_amount_minor,
+            "discount_minor": invoice.discount_minor,
+            "net_amount_minor": invoice.amount_minor,
+            "discount_kind": invoice.discount_kind,
+            "status": invoice.status,
+        },
         "meta": {},
     }

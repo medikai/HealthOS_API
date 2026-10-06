@@ -118,3 +118,32 @@ class RealtimeTokenResponse(BaseModel):
     expires_at: datetime
     renew_after_seconds: int
     issued_at: datetime
+
+
+class PatientRealtimeFeatureConfig(BaseModel):
+    available: bool
+    provider: Literal["ably"] = "ably"
+    reason: str | None = None
+    namespace: str
+    token_type: Literal["token_request"] = "token_request"
+    token_ttl_seconds: int
+    renew_after_seconds: int
+    browser_capabilities: list[str]
+    browser_publish: bool = False
+
+
+class PatientRealtimeTokenResponse(BaseModel):
+    available: bool
+    provider: Literal["ably"] = "ably"
+    namespace: str
+    client_id: str
+    generation: int
+    # Single account-level patient channel; subscribe-only.
+    channel: str
+    capabilities: dict[str, list[str]]
+    # Signed Ably TokenRequest. Contains no server API key.
+    token_request: dict[str, Any]
+    token_type: Literal["token_request"] = "token_request"
+    expires_at: datetime
+    renew_after_seconds: int
+    issued_at: datetime

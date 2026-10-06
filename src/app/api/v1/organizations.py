@@ -8,7 +8,15 @@ from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
 from ...domains.organization import access_service
 from ...models.identity import UserAccount
-from ...schemas.access import DepartmentCreate, FacilityCreate, OrganizationCreate, OrganizationFeatureCreate, StaffRoleAssign
+from ...schemas.access import (
+    DepartmentCreate,
+    FacilityCreate,
+    OrganizationCreate,
+    OrganizationFeatureCreate,
+    PortalSettingsUpdate,
+    StaffRoleAssign,
+)
+from ...schemas.patient_domain import ClinicPortalPolicyBody
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
@@ -87,6 +95,48 @@ async def create_facility(
         postal_code=payload.postal_code, phone=payload.phone, timezone=payload.timezone,
     )
     return {"success": True, "data": {"id": str(facility.id), "organization_id": str(organization_id), "name": facility.name, "code": facility.code}, "meta": {}}
+
+
+@router.patch("/{organization_id}/portal-settings")
+async def update_portal_settings(
+    organization_id: uuid.UUID,
+    payload: PortalSettingsUpdate,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization = await access_service.set_portal_enabled(
+        db, account, organization_id, payload.portal_enabled
+    )
+    return {
+        "success": True,
+        "data": {
+            "uuid": str(organization.id),
+            "portal_enabled": organization.portal_enabled,
+        },
+        "meta": {},
+    }
+
+
+@router.patch("/{organization_id}/facilities/{facility_uuid}/portal-settings")
+async def update_facility_portal_policy(
+    organization_id: uuid.UUID,
+    facility_uuid: uuid.UUID,
+    payload: ClinicPortalPolicyBody,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    facility = await access_service.set_facility_portal_policy(
+        db, account, organization_id, facility_uuid, payload.portal_auto_confirm
+    )
+    return {
+        "success": True,
+        "data": {
+            "uuid": str(facility.id),
+            "organization_uuid": str(facility.organization_id),
+            "portal_auto_confirm": facility.portal_auto_confirm,
+        },
+        "meta": {},
+    }
 
 
 @router.post("/{organization_id}/departments", status_code=status.HTTP_201_CREATED)

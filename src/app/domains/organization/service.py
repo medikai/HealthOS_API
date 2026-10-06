@@ -226,6 +226,69 @@ class AccessService:
             await db.refresh(assignment)
         return assignment
 
+    async def set_portal_enabled(
+        self,
+        db: AsyncSession,
+        actor: UserAccount,
+        organization_id: uuid.UUID,
+        enabled: bool,
+    ) -> Organization:
+        """Opt a clinic in/out of patient-portal discovery and requests."""
+        await self._require_admin(db, actor.id, organization_id)
+        organization = await db.get(Organization, organization_id)
+        if organization is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found.")
+        organization.portal_enabled = bool(enabled)
+        from ...domains.governance.audit import record_audit
+
+        await record_audit(
+            db,
+            organization_id=organization.id,
+            actor_user_id=actor.id,
+            action="organization.portal_enabled_changed",
+            resource_type="organization",
+            resource_id=organization.id,
+            details={"portal_enabled": bool(enabled)},
+        )
+        await db.commit()
+        await db.refresh(organization)
+        return organization
+
+    async def set_facility_portal_policy(
+        self,
+        db: AsyncSession,
+        actor: UserAccount,
+        organization_id: uuid.UUID,
+        facility_id: uuid.UUID,
+        auto_confirm: bool,
+    ) -> Facility:
+        """Explicit per-facility portal auto-confirm policy (default false)."""
+        await self._require_admin(db, actor.id, organization_id)
+        facility = await db.scalar(
+            select(Facility).where(
+                Facility.id == facility_id,
+                Facility.organization_id == organization_id,
+            )
+        )
+        if facility is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Facility not found.")
+        facility.portal_auto_confirm = bool(auto_confirm)
+        from ...domains.governance.audit import record_audit
+
+        await record_audit(
+            db,
+            organization_id=organization_id,
+            facility_id=facility.id,
+            actor_user_id=actor.id,
+            action="organization.facility_portal_policy_changed",
+            resource_type="facility",
+            resource_id=facility.id,
+            details={"portal_auto_confirm": bool(auto_confirm)},
+        )
+        await db.commit()
+        await db.refresh(facility)
+        return facility
+
     async def _require_admin(self, db: AsyncSession, account_id: uuid.UUID, organization_id: uuid.UUID) -> None:
         statement = select(StaffAssignment.id).join(StaffMember).where(StaffMember.organization_id == organization_id, StaffMember.user_account_id == account_id, StaffAssignment.role_code == "organization_admin", StaffAssignment.is_active.is_(True))
         if await db.scalar(statement) is None:

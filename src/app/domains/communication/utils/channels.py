@@ -35,6 +35,31 @@ def build_client_id(organization_id: UUID | str, staff_member_id: UUID | str) ->
     return f"staff:{organization_id}:{staff_member_id}"
 
 
+def patient_user_channel(
+    namespace: str, patient_account_id: UUID | str, generation: int
+) -> str:
+    """Account-level patient channel for one authorization generation.
+
+    A patient may link to several organizations; one account-level channel
+    carries ``organization_id`` in each event envelope instead of deriving a
+    channel per organization. Server-derived only.
+    """
+    return f"{namespace}:p:{patient_account_id}:g:{int(generation)}"
+
+
+def build_patient_client_id(patient_account_id: UUID | str) -> str:
+    """Bind clientId to the stable authenticated patient account identity."""
+    return f"patient:{patient_account_id}"
+
+
+def build_patient_capabilities(patient_channel: str) -> dict[str, list[str]]:
+    """Browser capabilities: own patient channel subscribe only.
+
+    No publish capability and no organization/staff channel is ever granted.
+    """
+    return {patient_channel: ["subscribe"]}
+
+
 def build_capabilities(
     own_channel: str, presence_channels: list[str]
 ) -> dict[str, list[str]]:

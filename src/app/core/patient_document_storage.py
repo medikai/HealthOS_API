@@ -128,6 +128,17 @@ def delete_object(object_name: str, generation: str | None = None) -> None:
     blob.delete(**kwargs)
 
 
+def open_object_stream(object_name: str, *, generation: str):
+    """Open an authenticated download stream pinned to the stored generation.
+
+    Used by patient routes so bytes are streamed by the API after authorization;
+    no public/signed URL is created and revocation is effective immediately.
+    """
+    bucket_name = _bucket_name()
+    blob = _client().bucket(bucket_name).blob(object_name, generation=int(generation))
+    return blob.open("rb", if_generation_match=int(generation))
+
+
 def create_download_url(
     object_name: str,
     *,

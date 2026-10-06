@@ -292,6 +292,11 @@ def _resolve_doctor_day_plan(
 
 
 def _protected(context: dict[str, Any], day: date, start: datetime, end: datetime) -> bool:
+    if "protected_windows" in context:
+        return any(
+            _overlaps(start, end, window_start, window_end)
+            for window_start, window_end in context["protected_windows"]
+        )
     weekday_name = WEEKDAYS[day.weekday()]
     for period in context["periods"]:
         try:
@@ -329,17 +334,15 @@ def _conflict(
     return None, None
 
 
-async def evaluate_availability(
-    db: AsyncSession,
+def _evaluate_context(
+    context: dict[str, Any],
     *,
-    organization_id: UUID,
     facility_id: UUID,
     practitioner_id: UUID | None,
     day: date,
     duration_minutes: int | None = None,
     enforce_future: bool = False,
 ) -> dict[str, Any]:
-    context = await _context(db, organization_id, facility_id, practitioner_id, day)
     schedule = context["schedule"]
     tz = context["tz"]
     facility_open = _facility_open(schedule, day) if schedule else False
@@ -438,6 +441,201 @@ async def evaluate_availability(
         status, reason = "FULLY_BOOKED", "No usable appointment slots remain for the requested date."
 
     return base | {"state": _categorize_state(status), "status": status, "reason": reason, "slots": slots, "usable_slots": usable}
+
+
+async def preload_availability_range(
+    db: AsyncSession,
+    *,
+    organization_id: UUID,
+    facility_id: UUID,
+    practitioner_id: UUID | None,
+    from_day: date,
+    to_day: date,
+) -> dict[str, Any]:
+    """Load every dataset needed to evaluate a window with a fixed query count.
+
+    The single-day _context loader issues one query per dataset per day; a
+    31-day window therefore costs ~180 sequential round trips. This loader
+    issues the same queries once for the whole window and context_for_day()
+    slices the result in memory, preserving per-day semantics exactly.
+    """
+    schedule = await db.scalar(select(FacilitySchedule).where(FacilitySchedule.facility_id == facility_id))
+    tz = timezone(schedule.timezone if schedule else DEFAULT_TIMEZONE)
+    range_start = local_datetime(from_day, time.min, tz)
+    range_end = local_datetime(to_day + timedelta(days=1), time.min, tz)
+
+    practitioner_schedules: list[PractitionerSchedule] = []
+    rules: list[PractitionerAvailabilityRule] = []
+    exceptions: list[PractitionerAvailabilityException] = []
+    if practitioner_id:
+        practitioner_schedules = list((await db.scalars(
+            select(PractitionerSchedule)
+            .where(
+                PractitionerSchedule.organization_id == organization_id,
+                PractitionerSchedule.facility_id == facility_id,
+                PractitionerSchedule.practitioner_id == practitioner_id,
+                PractitionerSchedule.is_active.is_(True),
+                PractitionerSchedule.effective_from <= to_day,
+            )
+            .filter(
+                (PractitionerSchedule.effective_to.is_(None)) | (PractitionerSchedule.effective_to >= from_day)
+            )
+            .order_by(PractitionerSchedule.created_at.desc())
+        )).all())
+
+        rules = list((await db.scalars(select(PractitionerAvailabilityRule).where(
+            PractitionerAvailabilityRule.organization_id == organization_id,
+            PractitionerAvailabilityRule.facility_id == facility_id,
+            PractitionerAvailabilityRule.practitioner_id == practitioner_id,
+            PractitionerAvailabilityRule.status == "active",
+        ))).all())
+
+        exceptions = list((await db.scalars(select(PractitionerAvailabilityException).where(
+            PractitionerAvailabilityException.organization_id == organization_id,
+            PractitionerAvailabilityException.facility_id == facility_id,
+            PractitionerAvailabilityException.practitioner_id == practitioner_id,
+            PractitionerAvailabilityException.exception_date >= from_day,
+            PractitionerAvailabilityException.exception_date <= to_day,
+        ))).all())
+
+    periods = list((await db.scalars(select(ProtectedPeriod).where(ProtectedPeriod.facility_id == facility_id))).all())
+
+    resource_ids = {rule.resource_id for rule in rules if rule.resource_id}
+    resources = {
+        value.id: value
+        for value in (await db.scalars(select(FacilityResource).where(FacilityResource.id.in_(resource_ids)))).all()
+    } if resource_ids else {}
+
+    appointments_query = select(Appointment).where(
+        Appointment.organization_id == organization_id,
+        Appointment.status.in_(ACTIVE_APPOINTMENT_STATUSES),
+        Appointment.scheduled_start < range_end,
+        Appointment.scheduled_end > range_start,
+    )
+    if practitioner_id:
+        appointments_query = appointments_query.where(
+            (Appointment.practitioner_id == practitioner_id) | (Appointment.facility_id == facility_id)
+        )
+    else:
+        appointments_query = appointments_query.where(Appointment.facility_id == facility_id)
+
+    appointments = list((await db.scalars(appointments_query)).all())
+
+    return {
+        "schedule": schedule,
+        "tz": tz,
+        "practitioner_schedules": practitioner_schedules,
+        "rules": rules,
+        "exceptions": exceptions,
+        "periods": periods,
+        "resources": resources,
+        "appointments": appointments,
+    }
+
+
+def context_for_day(range_context: dict[str, Any], day: date) -> dict[str, Any]:
+    """Slice a preloaded range context into the per-day context shape."""
+    tz = range_context["tz"]
+    start_of_day = local_datetime(day, time.min, tz)
+    end_of_day = local_datetime(day + timedelta(days=1), time.min, tz)
+
+    practitioner_schedule = next(
+        (
+            schedule
+            for schedule in range_context["practitioner_schedules"]
+            if schedule.effective_from <= day
+            and (schedule.effective_to is None or schedule.effective_to >= day)
+        ),
+        None,
+    )
+
+    protected_windows: list[tuple[datetime, datetime]] = []
+    weekday_name = WEEKDAYS[day.weekday()]
+    for period in range_context["periods"]:
+        try:
+            period_days = {str(value).lower() for value in json.loads(period.days_of_week)}
+        except (TypeError, ValueError):
+            period_days = set(WEEKDAYS)
+        if weekday_name not in period_days:
+            continue
+        protected_windows.append((
+            local_datetime(day, _clock(period.start_time), tz),
+            local_datetime(day, _clock(period.end_time), tz),
+        ))
+
+    return {
+        "schedule": range_context["schedule"],
+        "tz": tz,
+        "practitioner_schedule": practitioner_schedule,
+        "rules": [] if practitioner_schedule is not None else range_context["rules"],
+        "exceptions": [exc for exc in range_context["exceptions"] if exc.exception_date == day],
+        "periods": range_context["periods"],
+        "resources": range_context["resources"],
+        "appointments": [
+            appointment
+            for appointment in range_context["appointments"]
+            if appointment.scheduled_start < end_of_day and appointment.scheduled_end > start_of_day
+        ],
+        "protected_windows": protected_windows,
+    }
+
+
+async def evaluate_availability_range(
+    db: AsyncSession,
+    *,
+    organization_id: UUID,
+    facility_id: UUID,
+    practitioner_id: UUID | None,
+    from_day: date,
+    to_day: date,
+    duration_minutes: int | None = None,
+    enforce_future: bool = False,
+) -> list[dict[str, Any]]:
+    """Evaluate every day in [from_day, to_day] with a single preload pass."""
+    range_context = await preload_availability_range(
+        db,
+        organization_id=organization_id,
+        facility_id=facility_id,
+        practitioner_id=practitioner_id,
+        from_day=from_day,
+        to_day=to_day,
+    )
+    results: list[dict[str, Any]] = []
+    day = from_day
+    while day <= to_day:
+        results.append(
+            _evaluate_context(
+                context_for_day(range_context, day),
+                facility_id=facility_id,
+                practitioner_id=practitioner_id,
+                day=day,
+                duration_minutes=duration_minutes,
+                enforce_future=enforce_future,
+            )
+        )
+        day += timedelta(days=1)
+    return results
+
+
+async def evaluate_availability(
+    db: AsyncSession,
+    *,
+    organization_id: UUID,
+    facility_id: UUID,
+    practitioner_id: UUID | None,
+    day: date,
+    duration_minutes: int | None = None,
+    enforce_future: bool = False,
+) -> dict[str, Any]:
+    context = await _context(db, organization_id, facility_id, practitioner_id, day)
+    return _evaluate_context(
+        context,
+        facility_id=facility_id,
+        practitioner_id=practitioner_id,
+        day=day,
+        duration_minutes=duration_minutes,
+        enforce_future=enforce_future,
+    )
 
 
 async def validate_interval(

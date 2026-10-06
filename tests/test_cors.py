@@ -7,6 +7,8 @@ from src.app.core.setup import create_application
 PRODUCTION_ORIGIN = "https://healthos.medikai.in"
 EVIL_ORIGIN = "https://evil.example.com"
 LOCALHOST_ORIGIN = "http://localhost:5173"
+PATIENT_ORIGIN = "http://localhost:5174"
+PATIENT_IP_ORIGIN = "http://127.0.0.1:5174"
 
 
 def _cors_app(settings: CORSSettings) -> FastAPI:
@@ -43,6 +45,18 @@ def test_default_origins_include_production_and_localhost(monkeypatch) -> None:
     assert PRODUCTION_ORIGIN in origins
     assert LOCALHOST_ORIGIN in origins
     assert "http://127.0.0.1:5173" in origins
+    assert PATIENT_ORIGIN in origins
+    assert PATIENT_IP_ORIGIN in origins
+
+
+def test_patient_origin_preflight_is_allowed(monkeypatch) -> None:
+    monkeypatch.setenv("CORS_ORIGINS", f"{LOCALHOST_ORIGIN},{PATIENT_ORIGIN}")
+
+    response = _preflight(_cors_app(CORSSettings()), PATIENT_ORIGIN)
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == PATIENT_ORIGIN
+    assert response.headers["access-control-allow-credentials"] == "true"
 
 
 def test_json_env_origins_are_trimmed_and_de_slashed(monkeypatch) -> None:

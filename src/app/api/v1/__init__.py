@@ -17,6 +17,12 @@ from .frontend_compat import router as frontend_compat_router
 from .health import router as health_router
 from .masters import router as masters_router
 from .organizations import router as organizations_router
+from .appointment_requests import router as appointment_requests_router
+from .patient import router as patient_router
+from .patient_domain import router as patient_domain_router
+from .patient_links import router as patient_links_router
+from .patient_realtime import router as patient_realtime_router
+from .record_releases import router as record_releases_router
 from .patients import router as patients_router
 from .practitioner_schedules import router as practitioner_schedules_router
 from .queue import router as queue_router
@@ -40,6 +46,12 @@ router.include_router(communication_router)
 router.include_router(dashboard_router)
 router.include_router(calendar_router)
 router.include_router(staff_router)
+router.include_router(patient_router)
+router.include_router(patient_domain_router)
+router.include_router(patient_links_router)
+router.include_router(patient_realtime_router)
+router.include_router(appointment_requests_router)
+router.include_router(record_releases_router)
 router.include_router(frontend_compat_router)
 router.include_router(facility_schedule_router)
 router.include_router(events_router)

@@ -16,16 +16,19 @@ from .....models.communication import (
     Conversation,
     ConversationMember,
     NotificationRecipient,
+    PatientNotification,
+    PatientRealtimeChannelState,
     RealtimeChannelState,
 )
 from ...notifications.repository import NotificationRepository
 from ...notifications.service import NotificationService
 from ...shared.envelope import build_event_envelope
 from ...shared.errors import PermanentDeliveryError
-from ...utils.channels import own_user_channel
+from ...utils.channels import own_user_channel, patient_user_channel
 from .ably import AblyRealtimeProvider, build_ably_token_provider
 
 REALTIME_KIND_CONVERSATION = "conversation"
+REALTIME_EVENT_PATIENT_NOTIFICATION = "patient_notification"
 
 
 class RealtimeNotificationProvider:
@@ -52,6 +55,8 @@ class RealtimeNotificationProvider:
         payload = job.payload or {}
         if payload.get("kind") == REALTIME_KIND_CONVERSATION:
             return await self._deliver_conversation(payload)
+        if payload.get("patient_account_id") or getattr(job, "recipient_patient_id", None):
+            return await self._deliver_patient_notification(payload)
         return await self._deliver_notification(payload)
 
     async def _deliver_conversation(self, payload: dict) -> dict:
@@ -172,6 +177,61 @@ class RealtimeNotificationProvider:
             if recipient is not None and recipient.delivered_at is None:
                 recipient.delivered_at = datetime.now(UTC)
                 await db.commit()
+        return {"provider": "ably", "published": True}
+
+    async def _deliver_patient_notification(self, payload: dict) -> dict:
+        """Publish an opaque patient invalidation to the account channel.
+
+        The broker payload carries only UUIDs, the notification kind and the
+        organization; clinical detail is refetched over the authorized HTTP API.
+        """
+        notification_id = _uuid(payload.get("notification_id"))
+        patient_account_id = _uuid(payload.get("patient_account_id"))
+        if notification_id is None or patient_account_id is None:
+            raise PermanentDeliveryError(
+                "patient_notification_payload_invalid",
+                "Job is missing patient notification identity.",
+            )
+
+        async with self._session_factory() as db:
+            notification = await db.get(PatientNotification, notification_id)
+            if notification is None or notification.patient_account_id != patient_account_id:
+                raise PermanentDeliveryError(
+                    "patient_notification_missing",
+                    "Patient notification was not found.",
+                )
+            generation = await db.scalar(
+                select(PatientRealtimeChannelState.generation).where(
+                    PatientRealtimeChannelState.patient_account_id == patient_account_id
+                )
+            )
+            channel = patient_user_channel(
+                self.publisher.namespace, patient_account_id, generation or 1
+            )
+            envelope = build_event_envelope(
+                REALTIME_EVENT_PATIENT_NOTIFICATION,
+                entity_id=notification.id,
+                entity_version=None,
+                organization_id=notification.organization_id,
+                facility_id=notification.facility_id,
+                recipient_patient_id=patient_account_id,
+                data={
+                    "notification_id": str(notification.id),
+                    "kind": notification.kind,
+                    "organization_uuid": (
+                        str(notification.organization_id)
+                        if notification.organization_id
+                        else None
+                    ),
+                },
+            )
+
+        # network call outside any SQL transaction
+        await self.publisher.publish(
+            channel=channel,
+            event_type=REALTIME_EVENT_PATIENT_NOTIFICATION,
+            payload=envelope,
+        )
         return {"provider": "ably", "published": True}
 
 

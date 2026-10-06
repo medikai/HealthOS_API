@@ -10,10 +10,11 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ....models.care import Appointment, Encounter, QueueEntry
+from ....models.care import Appointment, AppointmentRequest, Encounter, QueueEntry
 from ....models.communication import JOB_CHANNEL_REALTIME, NotificationEvent
 from ..delivery.repository import DeliveryJobRepository
 from .constants import (
+    EVENT_APPOINTMENT_REQUEST_CREATED,
     EVENT_APPOINTMENT_RESCHEDULED,
     EVENT_CATALOG,
     EVENT_CONSULTATION_COMPLETED,
@@ -23,6 +24,7 @@ from .constants import (
     NOTIFICATION_TTL_MINUTES,
 )
 from .recipients import (
+    ADMIN_ROLES,
     acting_actor,
     exclude_actor,
     facility_role_staff_ids,
@@ -232,6 +234,43 @@ async def emit_queue_ready(
         resource_id=str(entry.id),
         coalesce_key=f"queue:{entry.id}",
         dedup_key=f"queue.ready:{entry.id}",
+    )
+
+
+async def emit_appointment_request_created(
+    db: AsyncSession, *, request: AppointmentRequest
+) -> NotificationEvent | None:
+    """Notify facility reception/admins that a patient request awaits review.
+
+    Called inside the appointment-request transaction; recipients are resolved
+    server-side (reception roles plus facility admins) and the realtime/push
+    outbox rows commit atomically with the request.
+    """
+    recipients = await facility_role_staff_ids(
+        db,
+        organization_id=request.organization_id,
+        facility_id=request.facility_id,
+        roles=RECEPTION_ROLES + ADMIN_ROLES,
+    )
+    return await record_notification(
+        db,
+        event_type=EVENT_APPOINTMENT_REQUEST_CREATED,
+        organization_id=request.organization_id,
+        facility_id=request.facility_id,
+        actor_user_id=None,
+        recipient_staff_ids=recipients,
+        title="New appointment request",
+        context="A patient requested an appointment; review is pending.",
+        task_type="appointment_request",
+        task_id=str(request.id),
+        task_state="awaiting",
+        action_kind="open",
+        action_label="Review request",
+        resource_type="appointment_request",
+        resource_id=str(request.id),
+        coalesce_key=f"appointment_request:{request.id}",
+        dedup_key=f"appointment_request.created:{request.id}",
+        expires_at=request.expires_at,
     )
 
 

@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
-from ....models.communication import RealtimeChannelState
+from ....models.communication import PatientRealtimeChannelState, RealtimeChannelState
 
 
 class RealtimeChannelRepository:
@@ -68,3 +68,78 @@ class RealtimeChannelRepository:
         state.updated_at = state.revoked_at
         await db.commit()
         return state
+
+
+class PatientRealtimeChannelRepository:
+    """SQL for server-controlled patient channel generation (account-level).
+
+    ``get_or_create`` commits the row so a token's generation is durable
+    (mirroring the staff repository). ``bump_generation`` deliberately does not
+    commit: it is called inside patient auth transactions (logout, phone
+    change) whose caller owns the commit so revocation stays atomic with the
+    session change.
+    """
+
+    async def get_patient(
+        self, db: AsyncSession, *, patient_account_id: UUID
+    ) -> PatientRealtimeChannelState | None:
+        return await db.scalar(
+            select(PatientRealtimeChannelState).where(
+                PatientRealtimeChannelState.patient_account_id == patient_account_id
+            )
+        )
+
+    async def get_or_create_patient(
+        self, db: AsyncSession, *, patient_account_id: UUID
+    ) -> PatientRealtimeChannelState:
+        state = await self.get_patient(db, patient_account_id=patient_account_id)
+        if state is not None:
+            return state
+        now = datetime.now(UTC)
+        stmt = (
+            pg_insert(PatientRealtimeChannelState)
+            .values(
+                id=uuid7(),
+                patient_account_id=patient_account_id,
+                generation=1,
+                created_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["patient_account_id"])
+        )
+        await db.execute(stmt)
+        await db.commit()
+        state = await self.get_patient(db, patient_account_id=patient_account_id)
+        assert state is not None
+        return state
+
+    async def bump_patient_generation(
+        self, db: AsyncSession, *, patient_account_id: UUID
+    ) -> int:
+        """Retire all previously issued patient channels/tokens atomically.
+
+        Caller commits. A first-ever bump starts at generation 2 so it matches
+        the generation an already-issued token (generation 1) held.
+        """
+        now = datetime.now(UTC)
+        stmt = (
+            pg_insert(PatientRealtimeChannelState)
+            .values(
+                id=uuid7(),
+                patient_account_id=patient_account_id,
+                generation=2,
+                revoked_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_update(
+                index_elements=["patient_account_id"],
+                set_={
+                    "generation": PatientRealtimeChannelState.generation + 1,
+                    "revoked_at": now,
+                    "updated_at": now,
+                },
+            )
+            .returning(PatientRealtimeChannelState.generation)
+        )
+        generation = (await db.execute(stmt)).scalar_one()
+        return int(generation)
