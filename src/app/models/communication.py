@@ -60,6 +60,10 @@ class DeliveryJob(Base):
             "organization_id",
             "recipient_staff_id",
         ),
+        Index(
+            "ix_communication_delivery_job_patient",
+            "recipient_patient_id",
+        ),
         {"schema": "communication"},
     )
 
@@ -83,6 +87,12 @@ class DeliveryJob(Base):
     )
     recipient_staff_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organization.staff_member.id"), index=True, default=None
+    )
+    # Patient-portal recipient (mutually exclusive with recipient_staff_id).
+    recipient_patient_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("identity.patient_portal_account.id", ondelete="CASCADE"),
+        default=None,
     )
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=5)
@@ -558,6 +568,167 @@ class RealtimeChannelState(Base):
     )
     generation: Mapped[int] = mapped_column(Integer, default=1)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class PatientRealtimeChannelState(Base):
+    """Server-controlled realtime channel generation per patient portal account.
+
+    A patient account may link to several organizations, so the channel is
+    account-level: one generation retires every previously issued patient
+    channel/token on logout or phone change, independent of organization.
+    Provider-side revocation is not available in the installed Ably Python SDK.
+    """
+
+    __tablename__ = "patient_realtime_channel_state"
+    __table_args__ = (
+        UniqueConstraint(
+            "patient_account_id",
+            name="uq_communication_patient_realtime_channel_state_account",
+        ),
+        Index(
+            "ix_communication_patient_realtime_account",
+            "patient_account_id",
+        ),
+        {"schema": "communication"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    patient_account_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("identity.patient_portal_account.id", ondelete="CASCADE"),
+    )
+    generation: Mapped[int] = mapped_column(Integer, default=1)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class PatientNotification(Base):
+    """Persistent in-app notification for a patient portal principal.
+
+    Staff notifications are never reused: no fabricated staff_member_id is
+    assigned to a patient. Rows are inserted in the same transaction as the
+    originating decision/release so no event is lost after commit.
+    """
+
+    __tablename__ = "patient_notification"
+    __table_args__ = (
+        UniqueConstraint("dedup_key", name="uq_communication_patient_notification_dedup"),
+        Index(
+            "ix_communication_patient_notification_account",
+            "patient_account_id",
+            "created_at",
+        ),
+        Index(
+            "ix_communication_patient_notification_unread",
+            "patient_account_id",
+            "read_at",
+        ),
+        {"schema": "communication"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    patient_account_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("identity.patient_portal_account.id", ondelete="CASCADE"),
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(48), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    organization_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organization.organization.id"),
+        index=True,
+        default=None,
+    )
+    facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organization.facility.id"), index=True, default=None
+    )
+    category: Mapped[str] = mapped_column(String(48), default="general")
+    deep_link: Mapped[str | None] = mapped_column(String(255), default=None)
+    dedup_key: Mapped[str | None] = mapped_column(String(160), default=None)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class PatientNotificationPreference(Base):
+    """Patient consent for in-app and push channels (default in-app only)."""
+
+    __tablename__ = "patient_notification_preference"
+    __table_args__ = (
+        UniqueConstraint(
+            "patient_account_id", name="uq_communication_patient_preference_account"
+        ),
+        {"schema": "communication"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    patient_account_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("identity.patient_portal_account.id", ondelete="CASCADE"),
+        index=True,
+    )
+    in_app: Mapped[bool] = mapped_column(Boolean, default=True)
+    push: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class PatientPushDevice(Base):
+    """Patient-bound push device. Push delivery is truthful: unavailable
+    credentials never block in-app notifications and no staff_member_id is used.
+    """
+
+    __tablename__ = "patient_push_device"
+    __table_args__ = (
+        UniqueConstraint("token", name="uq_communication_patient_push_token"),
+        UniqueConstraint(
+            "patient_account_id",
+            "installation_id",
+            name="uq_communication_patient_push_install",
+        ),
+        Index(
+            "ix_communication_patient_push_account_active",
+            "patient_account_id",
+            "is_active",
+        ),
+        {"schema": "communication"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    patient_account_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("identity.patient_portal_account.id", ondelete="CASCADE"),
+        index=True,
+    )
+    installation_id: Mapped[str] = mapped_column(String(128))
+    token: Mapped[str] = mapped_column(String(512))
+    platform: Mapped[str] = mapped_column(String(24), default="web")
+    user_agent: Mapped[str | None] = mapped_column(String(512), default=None)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    revoked_reason: Mapped[str | None] = mapped_column(String(64), default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
     )

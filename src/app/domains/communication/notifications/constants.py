@@ -31,6 +31,7 @@ CATEGORY_CATALOG: dict[str, dict] = {
 EVENT_TOKEN_ASSIGNED = "queue.token_assigned"
 EVENT_QUEUE_READY = "queue.ready"
 EVENT_APPOINTMENT_RESCHEDULED = "appointment.same_day_rescheduled"
+EVENT_APPOINTMENT_REQUEST_CREATED = "appointment_request.created"
 EVENT_CONSULTATION_COMPLETED = "consultation.completed"
 EVENT_CHAT_DIRECT = "chat.message.direct"
 EVENT_CHAT_TEAM = "chat.message.team"
@@ -42,6 +43,7 @@ EVENT_CATALOG: dict[str, dict] = {
     EVENT_TOKEN_ASSIGNED: {"category": CATEGORY_QUEUE, "priority": PRIORITY_P2, "kind": KIND_UPDATE},
     EVENT_QUEUE_READY: {"category": CATEGORY_QUEUE, "priority": PRIORITY_P1, "kind": KIND_TASK},
     EVENT_APPOINTMENT_RESCHEDULED: {"category": CATEGORY_APPOINTMENTS, "priority": PRIORITY_P2, "kind": KIND_UPDATE},
+    EVENT_APPOINTMENT_REQUEST_CREATED: {"category": CATEGORY_APPOINTMENTS, "priority": PRIORITY_P2, "kind": KIND_TASK},
     EVENT_CONSULTATION_COMPLETED: {"category": CATEGORY_CONSULTATION, "priority": PRIORITY_P2, "kind": KIND_UPDATE},
     EVENT_CHAT_DIRECT: {"category": CATEGORY_MESSAGES, "priority": PRIORITY_P2, "kind": KIND_UPDATE},
     EVENT_CHAT_TEAM: {"category": CATEGORY_MESSAGES, "priority": PRIORITY_P3, "kind": KIND_UPDATE},

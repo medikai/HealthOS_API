@@ -48,6 +48,7 @@ def build_event_envelope(
     organization_id: UUID | str | None,
     facility_id: UUID | str | None = None,
     recipient_staff_id: UUID | str | None = None,
+    recipient_patient_id: UUID | str | None = None,
     occurred_at: datetime | None = None,
     data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -69,5 +70,6 @@ def build_event_envelope(
         "organization_id": str(organization_id) if organization_id else None,
         "facility_id": str(facility_id) if facility_id else None,
         "recipient_staff_id": str(recipient_staff_id) if recipient_staff_id else None,
+        "recipient_patient_id": str(recipient_patient_id) if recipient_patient_id else None,
         "data": {k: _json_value(v) for k, v in safe_data.items()},
     }

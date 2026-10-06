@@ -25,6 +25,9 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     logto_organization_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True, default=None)
+    # Explicit opt-in for patient-portal clinic discovery/requests. Default off:
+    # a clinic's records are not exposed to the portal just because it exists.
+    portal_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
@@ -50,6 +53,9 @@ class Facility(Base):
     city_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("platform.city.id"), index=True, default=None)
     postal_code: Mapped[str | None] = mapped_column(String(32), default=None)
     phone: Mapped[str | None] = mapped_column(String(32), default=None)
+    # Explicit per-facility policy: patient requests at this facility may be
+    # auto-confirmed transactionally. Default false = approval required.
+    portal_auto_confirm: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 

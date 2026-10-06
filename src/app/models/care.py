@@ -15,8 +15,9 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from uuid6 import uuid7
 
@@ -50,6 +51,7 @@ class Appointment(Base):
         UniqueConstraint("organization_id", "idempotency_key", name="uq_appointment_org_idempotency"),
         Index("ix_care_appointment_facility_status_start", "facility_id", "status", "scheduled_start"),
         Index("ix_care_appointment_facility_start", "facility_id", "scheduled_start"),
+        Index("ix_care_appointment_practitioner_status_start", "practitioner_id", "status", "scheduled_start"),
         {"schema": "care"},
     )
 
@@ -69,9 +71,136 @@ class Appointment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
 
 
+class AppointmentRequest(Base):
+    """Patient portal request-first workflow, separate from Appointment status.
+
+    A pending request never reserves capacity. Approval revalidates the slot and
+    transactionally creates or moves the underlying Appointment. Idempotency is
+    keyed per organization with a payload fingerprint so identical retries replay
+    while a reused key with a different payload is rejected.
+    """
+
+    __tablename__ = "appointment_request"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('new', 'reschedule', 'cancel')",
+            name="ck_care_appointment_request_kind",
+        ),
+        CheckConstraint(
+            "status IN ('requested', 'approved', 'rejected', 'alternative_proposed', 'withdrawn', 'expired')",
+            name="ck_care_appointment_request_status",
+        ),
+        Index(
+            "ix_care_appointment_request_org_status",
+            "organization_id",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "ix_care_appointment_request_account_status",
+            "patient_account_id",
+            "status",
+        ),
+        Index("ix_care_appointment_request_patient", "patient_id", "status"),
+        Index("ix_care_appointment_request_facility", "facility_id", "status"),
+        Index(
+            "uq_care_appointment_request_idempotency",
+            "organization_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        {"schema": "care"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    facility_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.facility.id"), index=True)
+    patient_account_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("identity.patient_portal_account.id", ondelete="CASCADE"),
+        index=True,
+    )
+    patient_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.patient.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    practitioner_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.practitioner.id"), index=True, default=None)
+    appointment_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("care.appointment.id"), index=True, default=None)
+    kind: Mapped[str] = mapped_column(String(24), default="new")
+    status: Mapped[str] = mapped_column(String(24), default="requested", index=True)
+    requested_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    requested_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    alternative_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    alternative_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    alternative_resource_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("organization.facility_resource.id"), default=None)
+    alternative_note: Mapped[str | None] = mapped_column(String(500), default=None)
+    reason_code: Mapped[str | None] = mapped_column(String(64), default=None)
+    reason_text: Mapped[str | None] = mapped_column(Text, default=None)
+    decision_reason: Mapped[str | None] = mapped_column(String(500), default=None)
+    decided_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), default=None)
+    payload_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class RecordRelease(Base):
+    """Explicit staff release of an allowlisted patient-facing snapshot.
+
+    The snapshot is frozen at release time so a later clinical amendment never
+    silently changes patient-visible output; re-release creates a new version.
+    Partial unique index keeps at most one active (non-revoked) release per
+    resource.
+    """
+
+    __tablename__ = "record_release"
+    __table_args__ = (
+        CheckConstraint(
+            "resource_type IN ('encounter_summary', 'vitals', 'prescription', 'patient_document')",
+            name="ck_care_record_release_type",
+        ),
+        Index("ix_care_record_release_patient_type", "patient_id", "resource_type"),
+        Index("ix_care_record_release_org", "organization_id", "released_at"),
+        Index(
+            "uq_care_record_release_active",
+            "resource_type",
+            "resource_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        {"schema": "care"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    facility_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.facility.id"), index=True)
+    patient_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.patient.id"), index=True)
+    resource_type: Mapped[str] = mapped_column(String(32), index=True)
+    resource_id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    released_by_user_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.user_account.id"), index=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default_factory=dict)
+    encounter_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("care.encounter.id"), index=True, default=None)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    released_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+    revoked_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.user_account.id"), default=None)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    revoke_reason: Mapped[str | None] = mapped_column(String(500), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
 class PractitionerAvailabilityRule(Base):
     __tablename__ = "practitioner_availability_rule"
-    __table_args__ = (UniqueConstraint("facility_id", "practitioner_id", "weekday", "start_time", name="uq_care_availability_rule"), {"schema": "care"})
+    __table_args__ = (
+        UniqueConstraint("facility_id", "practitioner_id", "weekday", "start_time", name="uq_care_availability_rule"),
+        Index("ix_care_practitioner_availability_rule_lookup", "organization_id", "facility_id", "practitioner_id", "status"),
+        {"schema": "care"},
+    )
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
@@ -89,7 +218,16 @@ class PractitionerAvailabilityRule(Base):
 
 class PractitionerAvailabilityException(Base):
     __tablename__ = "practitioner_availability_exception"
-    __table_args__ = {"schema": "care"}
+    __table_args__ = (
+        Index(
+            "ix_care_practitioner_availability_exception_lookup",
+            "organization_id",
+            "facility_id",
+            "practitioner_id",
+            "exception_date",
+        ),
+        {"schema": "care"},
+    )
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
@@ -358,6 +496,14 @@ class PractitionerSchedule(Base):
     __table_args__ = (
         Index("ix_care_practitioner_schedule_facility_practitioner_active", "facility_id", "practitioner_id", "is_active"),
         Index("ix_care_practitioner_schedule_org_practitioner", "organization_id", "practitioner_id"),
+        Index(
+            "ix_care_practitioner_schedule_lookup",
+            "organization_id",
+            "facility_id",
+            "practitioner_id",
+            "is_active",
+            "effective_from",
+        ),
         {"schema": "care"},
     )
 

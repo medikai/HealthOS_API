@@ -69,6 +69,7 @@ def event_envelope_schema() -> dict:
             "organization_id": {"type": ["string", "null"]},
             "facility_id": {"type": ["string", "null"]},
             "recipient_staff_id": {"type": ["string", "null"]},
+            "recipient_patient_id": {"type": ["string", "null"]},
             "data": {
                 "type": "object",
                 "description": "Minimal, non-secret metadata only.",

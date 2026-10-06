@@ -123,6 +123,57 @@ class Invoice(Base):
     voided_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # Staff-applied consultation discount snapshot. ``amount_minor`` stays the
+    # net payable; ``gross_amount_minor`` is the immutable fee snapshot.
+    gross_amount_minor: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    discount_minor: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    discount_kind: Mapped[str | None] = mapped_column(String(16), default=None)
+    discount_bp: Mapped[int | None] = mapped_column(Integer, default=None)
+    discount_fixed_minor: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    discount_reason: Mapped[str | None] = mapped_column(String(500), default=None)
+    discounted_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("identity.user_account.id"), default=None
+    )
+    discounted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+
+class Receipt(Base):
+    """Stable receipt reference for one captured payment (PDF rendered on read)."""
+
+    __tablename__ = "receipt"
+    __table_args__ = (
+        UniqueConstraint("payment_id", name="uq_care_receipt_payment"),
+        UniqueConstraint("receipt_number", name="uq_care_receipt_number"),
+        Index("ix_care_receipt_invoice", "invoice_id"),
+        {"schema": "care"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False
+    )
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("organization.organization.id"), index=True
+    )
+    facility_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("organization.facility.id"), index=True
+    )
+    invoice_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("care.invoice.id"), index=True
+    )
+    payment_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("care.payment.id"), index=True
+    )
+    receipt_number: Mapped[str] = mapped_column(String(64))
+    amount_minor: Mapped[int] = mapped_column(BigInteger)
+    currency: Mapped[str] = mapped_column(String(3))
+    issued_by_user_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("identity.user_account.id"), default=None
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default_factory=lambda: datetime.now(UTC)
+    )
 
 
 class Payment(Base):

@@ -4,13 +4,19 @@ from .identity import (
     PasswordRecoveryChallenge,
     PasswordRecoveryGrant,
     PasswordRecoveryThrottle,
+    PatientLinkInvitation,
+    PatientOtpChallenge,
+    PatientOtpThrottle,
+    PatientPortalAccount,
+    PatientPortalSession,
+    PatientRecordLink,
     UserAccount,
 )
 from .identity import Patient, Person, Salutation
 from .care import (
-    Appointment, AppointmentBookingException, AuditLog, ClinicalDocumentationSetting, Encounter, Practitioner, PractitionerAvailabilityException,
+    Appointment, AppointmentBookingException, AppointmentRequest, AuditLog, ClinicalDocumentationSetting, Encounter, Practitioner, PractitionerAvailabilityException,
     PractitionerAvailabilityRule, PractitionerSchedule, Prescription, PrescriptionItem, QueueCounter,
-    PatientDocument, QueueEntry, SoapNote, Vital,
+    PatientDocument, QueueEntry, RecordRelease, SoapNote, Vital,
 )
 from .communication import (
     Conversation,
@@ -21,6 +27,10 @@ from .communication import (
     NotificationEvent,
     NotificationPreference,
     NotificationRecipient,
+    PatientNotification,
+    PatientNotificationPreference,
+    PatientPushDevice,
+    PatientRealtimeChannelState,
     PushDevice,
     RealtimeChannelState,
     WorkStatus,
