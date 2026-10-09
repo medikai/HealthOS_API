@@ -81,7 +81,7 @@ def normalize_record(row: dict[str, str], line: int) -> dict[str, object]:
 
 
 def source_rows(url: str):
-    request = Request(url, headers={"User-Agent": "HealthOS medicine importer"})
+    request = Request(url, headers={"User-Agent": "MedikAI medicine importer"})
     with urlopen(request, timeout=60) as response, io.TextIOWrapper(response, encoding="utf-8-sig", newline="") as text:
         reader = csv.DictReader(text)
         missing = REQUIRED - set(reader.fieldnames or ())

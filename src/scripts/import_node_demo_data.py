@@ -1,4 +1,4 @@
-"""Import the demo SQLite database used by healthos-frontend into HealthOS PostgreSQL.
+"""Import the demo SQLite database used by healthos-frontend into MedikAI PostgreSQL.
 
 The import is deliberately idempotent: source UUIDs are retained and existing rows
 are updated. Run migrations first, then:

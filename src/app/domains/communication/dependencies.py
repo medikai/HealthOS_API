@@ -62,7 +62,7 @@ async def resolve_staff_context(
     if row is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No active HealthOS organization access.",
+            detail="No active MedikAI organization access.",
         )
     staff, organization = row
 

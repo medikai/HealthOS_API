@@ -27,6 +27,7 @@ from ...domains.auth.recovery import (
     RecoveryRateLimited,
     build_recovery_service,
 )
+from ...domains.communication.email.service import build_email_service
 from ...domains.communication.push.service import build_push_service
 from ...domains.communication.shared.errors import ProviderUnavailable
 from ...models.identity import UserAccount
@@ -42,6 +43,7 @@ from ...schemas.local_auth import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 recovery_service = build_recovery_service(settings)
+email_service = build_email_service(settings)
 
 
 @router.get("/login", include_in_schema=False)
@@ -53,7 +55,7 @@ async def login(db: AsyncSession = Depends(async_get_db)) -> RedirectResponse:
 
 @router.get("/register", include_in_schema=False)
 async def register(db: AsyncSession = Depends(async_get_db)) -> RedirectResponse:
-    """Start Logto-hosted registration; credentials never enter HealthOS."""
+    """Start Logto-hosted registration; credentials never enter MedikAI."""
     sign_up_url, transaction = await logto_oidc_client.create_login_transaction(first_screen="identifier:register")
     await crud_auth_sessions.save_transaction(db, transaction)
     return RedirectResponse(sign_up_url, status_code=status.HTTP_302_FOUND)
@@ -145,6 +147,20 @@ async def local_register(
     db.add(account)
     await db.commit()
     await db.refresh(account)
+
+    # Best-effort welcome email; a mail failure must never fail registration.
+    try:
+        await email_service.enqueue_template(
+            db,
+            template_code="welcome",
+            to_email=account.email,
+            to_name=account.display_name,
+            dedup_key=f"welcome:{account.id}",
+            context={"recipient_name": account.display_name or "there"},
+        )
+        await db.commit()
+    except Exception:  # noqa: BLE001 - welcome email is best-effort
+        await db.rollback()
 
     access_token = await create_access_token({"sub": str(account.id), "email": account.email, "name": account.display_name, "ver": account.credentials_version})
     return {

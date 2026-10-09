@@ -170,7 +170,7 @@ async def _sleep_or_stop(stop_event: asyncio.Event, seconds: float) -> None:
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="HealthOS communication delivery worker")
+    parser = argparse.ArgumentParser(description="MedikAI communication delivery worker")
     parser.add_argument("--poll-seconds", type=float, default=settings.COMMUNICATION_WORKER_POLL_SECONDS)
     parser.add_argument("--once", action="store_true", help="run a single dispatch pass and exit")
     return parser.parse_args(argv)

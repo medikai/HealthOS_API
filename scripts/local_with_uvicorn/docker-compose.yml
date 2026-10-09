@@ -40,6 +40,21 @@ services:
       - ../../src/app:/code/app
       - ../../src/.env:/code/.env
 
+  # Durable email/realtime/push delivery worker (communication outbox).
+  # Distinct from the ARQ worker above; email is only sent when this runs.
+  communication_worker:
+    build: 
+      context: ../..
+      dockerfile: scripts/local_with_uvicorn/Dockerfile
+    command: python -m app.domains.communication.delivery.worker
+    env_file:
+      - ../../src/.env
+    depends_on:
+      - db
+    volumes:
+      - ../../src/app:/code/app
+      - ../../src/.env:/code/.env
+
   db:
     image: postgres:13
     env_file:

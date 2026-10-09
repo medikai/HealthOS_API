@@ -259,7 +259,7 @@ def _document_item(
         "uploaded_at": document.uploaded_at.isoformat(),
         "uploaded_by": {
             "uuid": str(uploader.id),
-            "display_name": uploader.display_name or uploader.email or "HealthOS user",
+            "display_name": uploader.display_name or uploader.email or "MedikAI user",
         },
         "encounter": {
             "uuid": str(encounter.id),

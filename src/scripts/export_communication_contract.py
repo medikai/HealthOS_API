@@ -50,7 +50,7 @@ def event_envelope_schema() -> dict:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "healthos://communication/event-envelope.schema.json",
-        "title": "HealthOS communication event envelope",
+        "title": "MedikAI communication event envelope",
         "type": "object",
         "required": [
             "event_id",
@@ -100,7 +100,7 @@ def export() -> None:
         "openapi": schema.get("openapi", "3.1.0"),
         "info": {
             **schema.get("info", {}),
-            "title": "HealthOS communication contract (implemented subset)",
+            "title": "MedikAI communication contract (implemented subset)",
             "description": "Focused export: only implemented /api/v1/communication endpoints plus referenced schemas.",
         },
         "paths": paths,

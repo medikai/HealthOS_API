@@ -59,7 +59,7 @@ def test_pdf_renderer_produces_valid_pdf_bytes():
         title="Prescription",
         subtitle="Synthetic test document",
         sections=[("Items", ["1. Paracetamol 500mg | 1 tablet | twice daily | 3 days"])],
-        footer_note="Clinical signing metadata is recorded in HealthOS; not a cryptographic signature.",
+        footer_note="Clinical signing metadata is recorded in MedikAI; not a cryptographic signature.",
     )
     assert pdf.startswith(b"%PDF-1.4")
     assert pdf.rstrip().endswith(b"%%EOF")

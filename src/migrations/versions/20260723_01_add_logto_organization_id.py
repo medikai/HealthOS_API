@@ -1,4 +1,4 @@
-"""map HealthOS organizations to Logto organizations
+"""map MedikAI organizations to Logto organizations
 
 Revision ID: 20260723_01
 Revises: 20260722_01

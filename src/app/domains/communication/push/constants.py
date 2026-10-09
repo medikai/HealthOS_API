@@ -4,8 +4,8 @@ PUSH_CHANNEL = "push"
 PUSH_PROVIDER = "fcm"
 
 # Generic OS payload text only; never names, MRNs or chat bodies.
-GENERIC_TITLE = "HealthOS"
-GENERIC_BODY = "Open HealthOS to view the update"
+GENERIC_TITLE = "MedikAI"
+GENERIC_BODY = "Open MedikAI to view the update"
 DEEP_LINK = "/notifications"
 
 PUSH_PRIORITIES = ("P1", "P2")  # P3 stays off by default
