@@ -1,1 +1,1 @@
-"""Business domains for the HealthOS application."""
+"""Business domains for the MedikAI application."""

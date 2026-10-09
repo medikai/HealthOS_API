@@ -268,7 +268,7 @@ def test_http_config_and_token_scope_and_missing_key(client):
 
 def test_http_requires_membership(client):
     def _forbidden():
-        raise HTTPException(status_code=403, detail="No active HealthOS organization access.")
+        raise HTTPException(status_code=403, detail="No active MedikAI organization access.")
 
     app.dependency_overrides[get_current_identity_account] = lambda: SimpleNamespace(id=uuid4())
     app.dependency_overrides[get_communication_staff_context] = _forbidden

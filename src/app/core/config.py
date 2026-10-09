@@ -65,7 +65,7 @@ class PostgresSettings(DatabaseSettings):
 
 
 class FirstUserSettings(BaseSettings):
-    ADMIN_NAME: str = "HealthOS Admin"
+    ADMIN_NAME: str = "MedikAI Admin"
     ADMIN_EMAIL: str = "admin@healthos.local"
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = ""
@@ -94,7 +94,7 @@ class CRUDAdminSettings(BaseSettings):
 
 
 
-class HealthOSArchitectureSettings(BaseSettings):
+class MedikAIArchitectureSettings(BaseSettings):
     HEALTHOS_DATABASE_NAME: str
     HEALTHOS_ARCHITECTURE_VERSION: str
     HEALTHOS_ARCHITECTURE_STAGE: str
@@ -345,7 +345,7 @@ class ZeptoMailSettings(BaseSettings):
     ZEPTOMAIL_API_BASE_URL: str = "https://api.zeptomail.com"
     ZEPTOMAIL_SEND_TOKEN: SecretStr | None = None
     EMAIL_FROM_ADDRESS: str = "noreply@medikai.in"
-    EMAIL_FROM_NAME: str = "Medikai Infodesk"
+    EMAIL_FROM_NAME: str = "MedikAI"
     EMAIL_TIMEOUT_SECONDS: float = 10.0
     EMAIL_MAX_ATTEMPTS: int = 5
 
@@ -368,7 +368,7 @@ class Settings(
     AppSettings,
     PostgresSettings,
     RedisSettings,
-    HealthOSArchitectureSettings,
+    MedikAIArchitectureSettings,
     LogtoSettings,
     CryptSettings,
     FirstUserSettings,

@@ -84,10 +84,10 @@ async def _run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="HealthOS ZeptoMail diagnostic (dev only)")
+    parser = argparse.ArgumentParser(description="MedikAI ZeptoMail diagnostic (dev only)")
     parser.add_argument("--to", required=True, help="explicit verified test recipient")
     parser.add_argument("--to-name", default="Test user")
-    parser.add_argument("--note", default="HealthOS email diagnostic.")
+    parser.add_argument("--note", default="MedikAI email diagnostic.")
     parser.add_argument(
         "--yes",
         action="store_true",

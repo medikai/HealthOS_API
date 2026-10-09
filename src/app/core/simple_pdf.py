@@ -3,7 +3,7 @@
 This renders plain text only (no fabricated signatures, logos or clinical
 interpretation). It exists because no PDF tooling is currently installed; it is
 a real, valid PDF byte stream, not the old metadata stub. Documents state that
-clinical signing metadata is recorded in HealthOS and is not a cryptographic
+clinical signing metadata is recorded in MedikAI and is not a cryptographic
 signature.
 """
 

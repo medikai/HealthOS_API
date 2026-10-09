@@ -1,6 +1,8 @@
-# HealthOS API — project status
+# MedikAI API — project status
 
 Snapshot: 2026-09-26, `feature/notifications` at `001df40`. This is a backend repository status, based on committed code, Git history, and the linked project notes. It does not certify a production rollout. `main` is at `7ab0a7c`; the three communication commits are on the feature branch.
+
+Working-tree update (2026-10-10, `feature/salutation_1`, uncommitted): MedikAI rebrand in outbound mail and user-visible strings — from-name defaults to `MedikAI`, all email templates render inside a new branded table-based layout (navy/teal palette, no remote images), a best-effort `welcome` email is enqueued on local registration, and `communication_worker` is available in the local compose file. Local verification: password-reset and welcome mail accepted by ZeptoMail; focused email/delivery/push/recovery tests pass.
 
 ## Achieved so far
 

@@ -109,7 +109,7 @@ def upgrade() -> None:
         op.add_column("facility", sa.Column(name, uuid, sa.ForeignKey(target), nullable=True), schema="organization")
         op.create_index(f"ix_organization_facility_{name}", "facility", [name], schema="organization")
 
-    # Existing HealthOS facilities are Indian; finer address data never existed to backfill safely.
+    # Existing MedikAI facilities are Indian; finer address data never existed to backfill safely.
     bind.execute(sa.text("UPDATE organization.facility SET country_id = :country_id WHERE country_id IS NULL"), {"country_id": country_id})
 
 

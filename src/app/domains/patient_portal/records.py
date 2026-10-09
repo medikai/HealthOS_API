@@ -273,7 +273,7 @@ async def build_prescription_snapshot(
         "advice": prescription.advice,
         "signed_at": prescription.signed_at.isoformat() if prescription.signed_at else None,
         "signing_note": (
-            "Clinical signing metadata is recorded in HealthOS; this is not a "
+            "Clinical signing metadata is recorded in MedikAI; this is not a "
             "cryptographic signature."
         ),
         "facility_name": facility.name if facility else None,
@@ -351,10 +351,10 @@ def render_prescription_pdf(
         sections.append(("Advice", [snapshot["advice"]]))
     return render_text_pdf(
         title="Prescription",
-        subtitle="HealthOS patient portal copy",
+        subtitle="MedikAI patient portal copy",
         sections=sections,
         footer_note=(
             snapshot.get("signing_note")
-            or "Clinical signing metadata is recorded in HealthOS; not a cryptographic signature."
+            or "Clinical signing metadata is recorded in MedikAI; not a cryptographic signature."
         ),
     )

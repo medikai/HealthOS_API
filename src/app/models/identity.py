@@ -42,7 +42,7 @@ class Salutation(Base):
 
 
 class UserAccount(Base):
-    """HealthOS-owned profile mapped to an immutable Logto subject."""
+    """MedikAI-owned profile mapped to an immutable Logto subject."""
 
     __tablename__ = "user_account"
     __table_args__ = {"schema": "identity"}

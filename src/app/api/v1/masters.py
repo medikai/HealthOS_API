@@ -774,7 +774,7 @@ async def visit_reasons() -> dict[str, Any]:
 
 @router.get("/access-roles")
 async def access_roles() -> dict[str, Any]:
-    """Permitted access roles across HealthOS organizations."""
+    """Permitted access roles across MedikAI organizations."""
     items = [
         {"key": "organization_admin", "name": "Organization Administrator"},
         {"key": "facility_operator", "name": "Facility Operator / Receptionist"},

@@ -48,7 +48,7 @@ async def _get_or_create_local_demo_account(db: AsyncSession) -> UserAccount:
         )
         if organization is None:
             organization = Organization(
-                name="HealthOS Local Demo", code="LOCAL-DEMO", is_active=True
+                name="MedikAI Local Demo", code="LOCAL-DEMO", is_active=True
             )
             db.add(organization)
             await db.flush()
@@ -107,7 +107,7 @@ async def _get_or_create_local_demo_account(db: AsyncSession) -> UserAccount:
 async def get_current_identity_account(
     request: Request, db: Annotated[AsyncSession, Depends(async_get_db)]
 ) -> UserAccount:
-    """Resolve the BFF session or local JWT to its HealthOS-owned user account mapping."""
+    """Resolve the BFF session or local JWT to its MedikAI-owned user account mapping."""
     metrics = current_request_metrics()
     auth_started_at = perf_counter()
     try:

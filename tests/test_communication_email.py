@@ -57,8 +57,8 @@ def _sample_request() -> EmailProviderRequest:
         to_email="test@example.com",
         to_name="Test user",
         from_email="noreply@medikai.in",
-        from_name="Medikai Infodesk",
-        subject="HealthOS email test",
+        from_name="MedikAI",
+        subject="MedikAI email test",
         html_body="<p>hi</p>",
         text_body="hi",
     )
@@ -97,15 +97,28 @@ def test_template_rejects_header_injection_in_subject():
         )
 
 
+def test_welcome_template_renders_and_escapes_recipient_name():
+    rendered = render_template("welcome", {"recipient_name": "<b>Dr. Rao</b>"})
+    assert rendered.subject == "Welcome to MedikAI"
+    assert "&lt;b&gt;Dr. Rao&lt;/b&gt;" in rendered.html_body
+    assert "<b>Dr. Rao</b>" not in rendered.html_body
+    assert "<b>Dr. Rao</b>" in rendered.text_body
+
+
+def test_welcome_template_rejects_unknown_fields():
+    with pytest.raises(InvalidTemplateContext):
+        render_template("welcome", {"recipient_name": "x", "unexpected": "y"})
+
+
 def test_diagnostic_request_is_escaped_and_labelled():
     request = build_diagnostic_request(
         to_email="test@example.com",
         to_name="Test user",
         note="<b>note</b>",
         from_email="noreply@medikai.in",
-        from_name="Medikai Infodesk",
+        from_name="MedikAI",
     )
-    assert request.subject == "HealthOS email test"
+    assert request.subject == "MedikAI email test"
     assert "&lt;b&gt;note&lt;/b&gt;" in request.html_body
     assert request.provider == "zeptomail"
 
@@ -264,7 +277,7 @@ def _message(**overrides) -> EmailMessage:
         "recipient_email": "test@example.com",
         "recipient_name": "Test user",
         "from_email": "noreply@medikai.in",
-        "from_name": "Medikai Infodesk",
+        "from_name": "MedikAI",
         "context": {"recipient_name": "Test user", "expires_minutes": "10"},
         "encrypted_context": encrypt_secret_context({"code": "123456"}),
         "is_secret": True,
@@ -374,7 +387,7 @@ def _service(*, configured: bool = True) -> EmailService:
         delivery_repository=_RecordingDeliveryRepository(),
         configured=configured,
         from_email="noreply@medikai.in",
-        from_name="Medikai Infodesk",
+        from_name="MedikAI",
         max_attempts=5,
     )
 
@@ -415,6 +428,28 @@ def test_service_splits_secret_context_and_keeps_outbox_minimal():
     assert set(payload) == {"email_message_id"}
     assert isinstance(payload["email_message_id"], str)
     assert "123456" not in json.dumps(payload)
+
+
+def test_service_enqueues_welcome_without_secret_context():
+    service = _service()
+    _, created = run(
+        service.enqueue_template(
+            None,
+            template_code="welcome",
+            to_email="test@example.com",
+            to_name="Test user",
+            dedup_key="welcome-1",
+            context={"recipient_name": "Test user"},
+        )
+    )
+    assert created is True
+    stored = service.repository.created[0]
+    assert stored["context"] == {"recipient_name": "Test user"}
+    assert stored["is_secret"] is False
+    assert stored["encrypted_context"] is None
+    enqueued = service.delivery_repository.enqueued[0]
+    assert enqueued["event_type"] == "email.welcome"
+    assert set(enqueued["payload"]) == {"email_message_id"}
 
 
 def test_service_rejects_invalid_template_context():

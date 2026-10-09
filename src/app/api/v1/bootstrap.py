@@ -90,7 +90,7 @@ async def _staff_context(
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No active HealthOS organization access.",
+            detail="No active MedikAI organization access.",
         )
     return result
 
@@ -133,7 +133,7 @@ async def me(
         if not rows:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="No active HealthOS organization access.",
+                detail="No active MedikAI organization access.",
             )
         staff, organization, practitioner, _ = rows[0]
         role_codes = sorted(

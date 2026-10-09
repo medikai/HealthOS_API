@@ -227,7 +227,7 @@ def render_receipt_pdf(
     ]
     return render_text_pdf(
         title="Payment receipt",
-        subtitle="HealthOS patient portal copy",
+        subtitle="MedikAI patient portal copy",
         sections=sections,
         footer_note="System-generated receipt for a recorded payment; not a tax invoice.",
     )

@@ -634,7 +634,7 @@ async def _clinical_settings_scope(
 
     rows = (await db.execute(query)).all()
     if not rows:
-        raise HTTPException(status_code=403, detail="No active HealthOS organization access.")
+        raise HTTPException(status_code=403, detail="No active MedikAI organization access.")
 
     organization_id = rows[0][0]
     roles = {row[1] for row in rows if row[1]}
