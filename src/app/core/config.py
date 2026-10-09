@@ -228,6 +228,7 @@ class CORSSettings(BaseSettings):
     CORS_HEADERS: list[str] = [
         "Authorization",
         "Content-Type",
+        "Idempotency-Key",
         "X-CSRF-Token",
         "X-Client-Timezone",
         "X-Client-Date",
