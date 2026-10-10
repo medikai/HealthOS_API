@@ -92,7 +92,7 @@ steps:
       - --min-instances=0
       - --max-instances=10
       - --env-vars-file=cloudrun.env.yaml
-      - --set-secrets=ABLY_API_KEY=ABLY_API_KEY:latest,POSTGRES_SYNC_URL=POSTGRES_SYNC_URL:latest,POSTGRES_ASYNC_URL=POSTGRES_ASYNC_URL:latest
+      - --set-secrets=SECRET_KEY=healthos-secret-key:latest,ABLY_API_KEY=ABLY_API_KEY:latest,POSTGRES_SYNC_URL=POSTGRES_SYNC_URL:latest,POSTGRES_ASYNC_URL=POSTGRES_ASYNC_URL:latest
 
 images:
   - asia-south1-docker.pkg.dev/storied-shell-510407-e0/healthos/healthos-api:$COMMIT_SHA
