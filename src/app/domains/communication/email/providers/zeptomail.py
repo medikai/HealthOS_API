@@ -237,7 +237,19 @@ class EmailDeliveryProvider:
                 raise PermanentDeliveryError(
                     "email_message_missing", "Email message was not found."
                 )
+
+        # Build (render/decrypt) outside the session; build-time permanent
+        # failures must still mark the message failed and erase its secret.
+        try:
             request = self._build_request(message)
+        except PermanentDeliveryError as exc:
+            await self._record_failure(
+                message_id,
+                error=f"{exc.code}:{exc.reason}",
+                status=EMAIL_STATUS_FAILED,
+                clear_secret=True,
+            )
+            raise
 
         try:
             result = await self.client.send(request)

@@ -110,6 +110,12 @@ async def dispatch_inprocess(owner: str | None = None) -> DispatchOutcome:
     return await run_pass_bounded(dispatcher, owner=owner or f"inprocess-{uuid4().hex[:8]}")
 
 
+async def _run_maintenance_bounded() -> dict | None:
+    """One maintenance run in its own short session (caller applies a timeout)."""
+    async with local_session() as db:
+        return await run_maintenance_safely(db)
+
+
 async def run_forever(
     *,
     owner: str,
@@ -150,10 +156,16 @@ async def run_forever(
         pass_index += 1
         if should_run_maintenance(pass_index, maintenance_every):
             try:
-                async with local_session() as db:
-                    maintenance = await run_maintenance_safely(db)
+                maintenance = await asyncio.wait_for(
+                    _run_maintenance_bounded(),
+                    timeout=max(1.0, settings.COMMUNICATION_WORKER_PASS_TIMEOUT_SECONDS),
+                )
                 if maintenance:
                     logger.info("communication_worker_maintenance", **maintenance)
+            except asyncio.TimeoutError:
+                # A stalled maintenance DB call must not park the worker forever
+                # (observed in dev with a shared remote database).
+                logger.warning("communication_worker_maintenance_timeout", owner=owner)
             except Exception:
                 logger.exception("communication_worker_maintenance_failed", owner=owner)
         if outcome.processed:
