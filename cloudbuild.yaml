@@ -20,37 +20,59 @@ steps:
         pip install --quiet pyyaml
         python - <<'PY'
         from pathlib import Path
+        import sys
         import yaml
 
         path = Path("cloudrun.env.yaml")
         print("Validating cloudrun.env.yaml...")
 
         try:
-            data = yaml.safe_load(path.read_text())
+            text = path.read_text()
+            data = yaml.safe_load(text)
+
             if not isinstance(data, dict):
                 raise ValueError(
-                    "Expected a YAML mapping: KEY: VALUE"
+                    "Expected a YAML mapping using KEY: VALUE syntax."
                 )
+
             print("YAML syntax is valid.")
             print(f"Environment variable count: {len(data)}")
+
         except Exception as exc:
-            print(f"Configuration validation failed: {type(exc).__name__}")
-            if hasattr(exc, "problem_mark") and exc.problem_mark:
-                mark = exc.problem_mark
+            print(f"Validation failed: {type(exc).__name__}")
+
+            mark = getattr(exc, "problem_mark", None)
+            if mark is None and isinstance(exc, yaml.YAMLError):
+                mark = getattr(exc, "context_mark", None)
+
+            if mark is not None:
+                line_number = mark.line + 1
+                column_number = mark.column + 1
                 print(
-                    f"Error at line {mark.line + 1}, "
-                    f"column {mark.column + 1}"
+                    f"Error at line {line_number}, "
+                    f"column {column_number}."
                 )
-            elif isinstance(exc, yaml.YAMLError):
-                mark = getattr(exc, "problem_mark", None)
-                if mark:
-                    print(
-                        f"Error at line {mark.line + 1}, "
-                        f"column {mark.column + 1}"
-                    )
+
+                lines = path.read_text().splitlines()
+                start = max(0, line_number - 4)
+                end = min(len(lines), line_number + 3)
+
+                print("Nearby lines (values redacted):")
+                for index in range(start, end):
+                    line = lines[index]
+                    stripped = line.strip()
+
+                    if not stripped or stripped.startswith("#"):
+                        print(f"{index + 1}: [blank/comment]")
+                    elif ":" in stripped:
+                        key = stripped.split(":", 1)[0].strip()
+                        print(f"{index + 1}: {key}: [REDACTED]")
+                    else:
+                        print(f"{index + 1}: [NON-MAPPING LINE]")
             else:
                 print(str(exc))
-            raise SystemExit(1)
+
+            sys.exit(1)
         PY
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
