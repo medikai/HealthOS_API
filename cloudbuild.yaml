@@ -92,7 +92,26 @@ steps:
       - --min-instances=0
       - --max-instances=10
       - --env-vars-file=cloudrun.env.yaml
-      - --set-secrets=SECRET_KEY=healthos-secret-key:latest,ABLY_API_KEY=ABLY_API_KEY:latest,POSTGRES_SYNC_URL=POSTGRES_SYNC_URL:latest,POSTGRES_ASYNC_URL=POSTGRES_ASYNC_URL:latest
+      - --set-secrets=SECRET_KEY=healthos-secret-key:latest,ABLY_API_KEY=ABLY_API_KEY:latest,POSTGRES_SYNC_URL=POSTGRES_SYNC_URL:latest,POSTGRES_ASYNC_URL=POSTGRES_ASYNC_URL:latest,ZEPTOMAIL_SEND_TOKEN=ZEPTOMAIL_SEND_TOKEN:latest
+
+  # Keep the durable delivery worker (email/realtime/push outbox) on the same
+  # image as the API. The job is created once via scripts/setup_delivery_worker.sh
+  # and is triggered every minute by Cloud Scheduler; this step only rolls the image.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: sh
+    args:
+      - -c
+      - |
+        set -e
+        JOB=healthos-delivery-worker
+        REGION=asia-south1
+        PROJECT=storied-shell-510407-e0
+        IMAGE=asia-south1-docker.pkg.dev/$$PROJECT/healthos/healthos-api:$COMMIT_SHA
+        if gcloud run jobs describe "$$JOB" --project="$$PROJECT" --region="$$REGION" >/dev/null 2>&1; then
+          gcloud run jobs update "$$JOB" --project="$$PROJECT" --region="$$REGION" --image="$$IMAGE"
+        else
+          echo "Cloud Run job $$JOB not found; run scripts/setup_delivery_worker.sh once to create it."
+        fi
 
 images:
   - asia-south1-docker.pkg.dev/storied-shell-510407-e0/healthos/healthos-api:$COMMIT_SHA
