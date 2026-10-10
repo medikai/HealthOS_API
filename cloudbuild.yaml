@@ -27,7 +27,7 @@ steps:
       - --memory=1Gi
       - --min-instances=0
       - --max-instances=10
-      - --set-env-vars=ENVIRONMENT=production,CRUD_ADMIN_ENABLED=false,AUTH_COOKIE_SECURE=true
+      - --update-env-vars=ENVIRONMENT=production,CRUD_ADMIN_ENABLED=false,AUTH_COOKIE_SECURE=true
 
 images:
   - asia-south1-docker.pkg.dev/storied-shell-510407-e0/healthos/healthos-api:$COMMIT_SHA
