@@ -138,7 +138,7 @@ class PatientSearchTests(unittest.IsolatedAsyncioTestCase):
             gender="male",
         )
         db = SimpleNamespace(
-            execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [(p1, person1, 1)]))
+            execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [(p1, person1, 1, None)]))
         )
 
         with patch("src.app.api.v1.patients._org", return_value=self.organization):
@@ -162,6 +162,7 @@ class PatientSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(item["phone"], "+919876543210")
         self.assertEqual(item["email"], "aarav@example.com")
         self.assertEqual(item["status"], "active")
+        self.assertIsNone(item["last_visit_at"])
         self.assertFalse(res["data"]["has_more"])
         self.assertIsNone(res["data"]["next_cursor"])
 
@@ -190,7 +191,11 @@ class PatientSearchTests(unittest.IsolatedAsyncioTestCase):
         db = SimpleNamespace(
             execute=AsyncMock(
                 return_value=SimpleNamespace(
-                    all=lambda: [(p1, person1, 1), (p2, person2, 2), (entity(3), entity(13), 3)]
+                    all=lambda: [
+                        (p1, person1, 1, None),
+                        (p2, person2, 2, None),
+                        (entity(3), entity(13), 3, None),
+                    ]
                 )
             )
         )

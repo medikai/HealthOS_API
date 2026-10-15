@@ -7,11 +7,13 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, case, exists, func, or_, select
+from sqlalchemy import and_, case, exists, false, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...api.dependencies import get_current_identity_account
 from ...core.db.database import async_get_db
+from ...core.events import make_event, publish
 from ...core.timezones import (
     DEFAULT_TIMEZONE,
     local_datetime,
@@ -24,6 +26,7 @@ from ...models.care import (
     Appointment,
     Diagnosis,
     Encounter,
+    PatientView,
     Practitioner,
     Prescription,
     PrescriptionItem,
@@ -33,13 +36,16 @@ from ...models.care import (
 )
 from ...models.identity import Patient, Person, UserAccount
 from ...models.organization import Facility, FacilitySchedule
-from ...schemas.patients import PatientCreate, PatientUpdate
+from ...schemas.patients import PatientCreate, PatientUpdate, PatientViewRequest
 from .bootstrap import _staff_context
 from .scheduling import _scope
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 MAX_OFFSET = 10_000
+ABHA_NUMBER_DIGITS = 14
+DUPLICATE_MATCH_LIMIT = 20
+SEARCH_SCOPES = {"all", "name", "phone", "mrn", "abha"}
 
 
 async def _org(db: AsyncSession, account: UserAccount):
@@ -47,7 +53,7 @@ async def _org(db: AsyncSession, account: UserAccount):
     return organization
 
 
-def _item(patient: Patient, person: Person) -> dict[str, Any]:
+def _item(patient: Patient, person: Person, last_visit_at: datetime | None = None) -> dict[str, Any]:
     name = f"{person.first_name} {person.last_name or ''}".strip()
     return {
         "uuid": str(patient.id),
@@ -61,9 +67,52 @@ def _item(patient: Patient, person: Person) -> dict[str, Any]:
         "email": person.email,
         "date_of_birth": person.date_of_birth,
         "gender": person.gender,
+        "abha_number": getattr(person, "abha_number", None),
+        "abha_address": getattr(person, "abha_address", None),
         "salutation_id": str(person.salutation_id) if getattr(person, "salutation_id", None) else None,
         "status": "active" if patient.is_active else "inactive",
+        "last_visit_at": last_visit_at.isoformat() if last_visit_at else None,
     }
+
+
+def _normalize_abha_number(raw: str | None) -> str | None:
+    """Return canonical 14-digit ABHA number (dashes/spaces stripped) or None."""
+    if raw is None:
+        return None
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return None
+    if len(digits) != ABHA_NUMBER_DIGITS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ABHA number must contain exactly 14 digits.",
+        )
+    return digits
+
+
+def _normalize_abha_address(raw: str | None) -> str | None:
+    """Return canonical lowercase ABHA address (local@domain) or None."""
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if not value:
+        return None
+    local, separator, domain = value.partition("@")
+    if not separator or not local or not domain or "@" in domain:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ABHA address must be in local@domain format.",
+        )
+    return value
+
+
+def _abha_search_keys(raw: str) -> tuple[str | None, str | None]:
+    """Leniently derive (14-digit number, lower address) search keys from a raw query."""
+    digits = re.sub(r"\D", "", raw)
+    number = digits if len(digits) == ABHA_NUMBER_DIGITS else None
+    address = raw.strip().lower() if "@" in raw else None
+    return number, address
+
 
 
 def _escape_like(text: str) -> str:
@@ -221,6 +270,7 @@ async def _execute_patient_search(
     cursor: str | None = None,
     facility_id: UUID | str | None = None,
     facility_uuid: UUID | str | None = None,
+    scope: str = "all",
 ) -> dict[str, Any]:
     # Normalize potential FastAPI Query default object if called directly in tests
     target_facility_id: UUID | None = None
@@ -247,6 +297,12 @@ async def _execute_patient_search(
     offset_val = offset if isinstance(offset, int) else 0
     limit_val = limit if isinstance(limit, int) else 20
     q_val = q if isinstance(q, str) else ""
+    scope_val = scope if isinstance(scope, str) else "all"
+    if scope_val not in SEARCH_SCOPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid search scope.",
+        )
 
     if cursor_val and offset_val > 0:
         raise HTTPException(
@@ -264,73 +320,103 @@ async def _execute_patient_search(
     first_name_lower_col = func.lower(Person.first_name)
     last_name_lower_col = func.lower(func.coalesce(Person.last_name, ""))
 
+    def _in_scope(*candidates: str) -> bool:
+        return scope_val == "all" or scope_val in candidates
+
     if clean_q:
         lower_q = clean_q.lower()
         escaped_q = _escape_like(clean_q)
         phone_variants = _phone_search_variants(clean_q)
+        abha_number_q, abha_address_q = _abha_search_keys(clean_q)
 
-        # Build ranking expressions
-        exact_phone_cond = (
-            Person.phone.in_(phone_variants)
-            if phone_variants
-            else (Person.phone == clean_q)
-        )
-        exact_mrn_cond = func.lower(Patient.mrn) == lower_q
-        exact_name_cond = or_(
-            func.lower(Person.first_name) == lower_q,
-            func.lower(Person.last_name) == lower_q,
-            func.lower(full_name_col) == lower_q,
-        )
+        # Exact identifier matches rank first (phone, MRN, ABHA).
+        identifier_conditions: list[Any] = []
+        if _in_scope("phone"):
+            if phone_variants:
+                identifier_conditions.append(Person.phone.in_(phone_variants))
+            else:
+                identifier_conditions.append(Person.phone == clean_q)
+        if _in_scope("mrn"):
+            identifier_conditions.append(func.lower(Patient.mrn) == lower_q)
+        if _in_scope("abha"):
+            if abha_number_q:
+                identifier_conditions.append(Person.abha_number == abha_number_q)
+            if abha_address_q:
+                identifier_conditions.append(func.lower(Person.abha_address) == abha_address_q)
+        exact_identifier_cond = or_(*identifier_conditions) if identifier_conditions else false()
 
-        prefix_name_mrn_cond = or_(
-            Person.first_name.ilike(f"{escaped_q}%", escape="\\"),
-            Person.last_name.ilike(f"{escaped_q}%", escape="\\"),
-            full_name_col.ilike(f"{escaped_q}%", escape="\\"),
-            Patient.mrn.ilike(f"{escaped_q}%", escape="\\"),
-        )
-        prefix_phone_cond = (
-            or_(
-                *[
-                    Person.phone.ilike(f"{_escape_like(pv)}%", escape="\\")
-                    for pv in phone_variants
+        name_conditions: list[Any] = []
+        if _in_scope("name"):
+            name_conditions = [
+                func.lower(Person.first_name) == lower_q,
+                func.lower(Person.last_name) == lower_q,
+                func.lower(full_name_col) == lower_q,
+            ]
+        exact_name_cond = or_(*name_conditions) if name_conditions else false()
+
+        prefix_conditions: list[Any] = []
+        if _in_scope("name"):
+            prefix_conditions.extend(
+                [
+                    Person.first_name.ilike(f"{escaped_q}%", escape="\\"),
+                    Person.last_name.ilike(f"{escaped_q}%", escape="\\"),
+                    full_name_col.ilike(f"{escaped_q}%", escape="\\"),
                 ]
             )
-            if phone_variants
-            else Person.phone.ilike(f"{escaped_q}%", escape="\\")
-        )
+        if _in_scope("mrn"):
+            prefix_conditions.append(Patient.mrn.ilike(f"{escaped_q}%", escape="\\"))
+        if _in_scope("phone"):
+            if phone_variants:
+                prefix_conditions.extend(
+                    Person.phone.ilike(f"{_escape_like(pv)}%", escape="\\")
+                    for pv in phone_variants
+                )
+            else:
+                prefix_conditions.append(Person.phone.ilike(f"{escaped_q}%", escape="\\"))
+        if _in_scope("abha"):
+            if abha_number_q:
+                prefix_conditions.append(Person.abha_number.ilike(f"{abha_number_q}%"))
+            if abha_address_q:
+                prefix_conditions.append(
+                    func.lower(Person.abha_address).ilike(f"{escaped_q}%", escape="\\")
+                )
+        prefix_cond = or_(*prefix_conditions) if prefix_conditions else false()
 
         # Gated search: Require >= 3 characters for broad substring/contains search
         is_short = len(clean_q) < 3
 
         if is_short:
             where_match = or_(
-                exact_phone_cond,
-                exact_mrn_cond,
+                exact_identifier_cond,
                 exact_name_cond,
-                prefix_name_mrn_cond,
-                prefix_phone_cond,
+                prefix_cond,
             )
         else:
-            substring_cond = or_(
-                Person.first_name.ilike(f"%{escaped_q}%", escape="\\"),
-                Person.last_name.ilike(f"%{escaped_q}%", escape="\\"),
-                full_name_col.ilike(f"%{escaped_q}%", escape="\\"),
-                Person.phone.ilike(f"%{escaped_q}%", escape="\\"),
-                Patient.mrn.ilike(f"%{escaped_q}%", escape="\\"),
-            )
+            substring_conditions: list[Any] = []
+            if _in_scope("name"):
+                substring_conditions.extend(
+                    [
+                        Person.first_name.ilike(f"%{escaped_q}%", escape="\\"),
+                        Person.last_name.ilike(f"%{escaped_q}%", escape="\\"),
+                        full_name_col.ilike(f"%{escaped_q}%", escape="\\"),
+                    ]
+                )
+            if _in_scope("phone"):
+                substring_conditions.append(Person.phone.ilike(f"%{escaped_q}%", escape="\\"))
+            if _in_scope("mrn"):
+                substring_conditions.append(Patient.mrn.ilike(f"%{escaped_q}%", escape="\\"))
+            substring_cond = or_(*substring_conditions) if substring_conditions else false()
             where_match = or_(
-                exact_phone_cond,
-                exact_mrn_cond,
+                exact_identifier_cond,
                 exact_name_cond,
-                prefix_name_mrn_cond,
-                prefix_phone_cond,
+                prefix_cond,
                 substring_cond,
             )
 
         rank_expr = case(
-            (or_(exact_phone_cond, exact_mrn_cond), 1),
+            (exact_identifier_cond, 1),
             (exact_name_cond, 2),
-            (or_(prefix_name_mrn_cond, prefix_phone_cond), 3),
+            (prefix_cond, 3),
             else_=4,
         ).label("search_rank")
 
@@ -338,9 +424,21 @@ async def _execute_patient_search(
         rank_expr = func.coalesce(0, 0).label("search_rank")
         where_match = None
 
+    last_visit_subquery = (
+        select(func.max(Encounter.completed_at))
+        .where(
+            Encounter.patient_id == Patient.id,
+            Encounter.organization_id == Patient.organization_id,
+            Encounter.status == "completed",
+        )
+        .correlate(Patient)
+        .scalar_subquery()
+        .label("last_visit_at")
+    )
+
     # Base query joined on actual patient/person relationships scoped to organization
     query = (
-        select(Patient, Person, rank_expr)
+        select(Patient, Person, rank_expr, last_visit_subquery)
         .join(
             Person,
             and_(
@@ -403,11 +501,14 @@ async def _execute_patient_search(
 
     has_more = len(rows) > limit_val
     page_rows = rows[:limit_val]
-    items = [_item(patient, person) for patient, person, _ in page_rows]
+    items = [
+        _item(patient, person, last_visit_at)
+        for patient, person, _, last_visit_at in page_rows
+    ]
 
     next_cursor = None
     if has_more and page_rows:
-        last_patient, last_person, last_rank = page_rows[-1]
+        last_patient, last_person, last_rank, _ = page_rows[-1]
         next_cursor = _encode_cursor(
             v=1,
             org_id=organization.id,
@@ -448,6 +549,7 @@ async def list_patients(
     cursor: str | None = Query(default=None),
     facility_id: UUID | None = Query(default=None),
     facility_uuid: UUID | None = Query(default=None),
+    scope: str = Query(default="all", pattern="^(all|name|phone|mrn|abha)$"),
 ) -> dict[str, Any]:
     return await _execute_patient_search(
         db=db,
@@ -458,6 +560,7 @@ async def list_patients(
         cursor=cursor,
         facility_id=facility_id,
         facility_uuid=facility_uuid,
+        scope=scope,
     )
 
 
@@ -471,6 +574,7 @@ async def search_patients(
     cursor: str | None = Query(default=None),
     facility_id: UUID | None = Query(default=None),
     facility_uuid: UUID | None = Query(default=None),
+    scope: str = Query(default="all", pattern="^(all|name|phone|mrn|abha)$"),
 ) -> dict[str, Any]:
     return await _execute_patient_search(
         db=db,
@@ -481,18 +585,89 @@ async def search_patients(
         cursor=cursor,
         facility_id=facility_id,
         facility_uuid=facility_uuid,
+        scope=scope,
     )
 
 
-@router.get("/duplicates")
-async def duplicate_patients(
+def _duplicate_match_conditions(
+    *,
+    phone: str | None,
+    first_name: str | None,
+    last_name: str | None,
+    date_of_birth: str | None,
+    abha_number: str | None,
+    abha_address: str | None,
+) -> list[Any]:
+    conditions: list[Any] = []
+    if phone:
+        conditions.append(Person.phone.in_(_phone_search_variants(phone)))
+    if first_name:
+        conditions.append(func.lower(Person.first_name) == first_name.strip().lower())
+    if last_name:
+        conditions.append(
+            func.lower(func.coalesce(Person.last_name, "")) == last_name.strip().lower()
+        )
+    if date_of_birth:
+        conditions.append(Person.date_of_birth == date_of_birth.strip())
+    if abha_number:
+        conditions.append(Person.abha_number == abha_number)
+    if abha_address:
+        conditions.append(func.lower(Person.abha_address) == abha_address)
+    return conditions
+
+
+def _duplicate_match_reason(
+    person: Person,
+    *,
+    phone: str | None,
+    first_name: str | None,
+    last_name: str | None,
+    date_of_birth: str | None,
+    abha_number: str | None,
+    abha_address: str | None,
+) -> str:
+    if abha_number and getattr(person, "abha_number", None) == abha_number:
+        return "abha"
+    if abha_address and (getattr(person, "abha_address", None) or "").lower() == abha_address:
+        return "abha"
+    if phone and getattr(person, "phone", None) in set(_phone_search_variants(phone)):
+        return "phone"
+    name_matches = bool(
+        first_name
+        and last_name
+        and (getattr(person, "first_name", None) or "").lower() == first_name.strip().lower()
+        and (getattr(person, "last_name", None) or "").lower() == last_name.strip().lower()
+    )
+    if name_matches and date_of_birth and getattr(person, "date_of_birth", None) == date_of_birth.strip():
+        return "name_dob"
+    if name_matches:
+        return "name"
+    if date_of_birth:
+        return "date_of_birth"
+    return "identifier"
+
+
+async def _duplicate_candidates(
+    db: AsyncSession,
+    organization_id: UUID,
+    *,
     phone: str | None = None,
     first_name: str | None = None,
     last_name: str | None = None,
-    account: Annotated[UserAccount, Depends(get_current_identity_account)] = ...,
-    db: Annotated[AsyncSession, Depends(async_get_db)] = ...,
-) -> dict[str, Any]:
-    organization = await _org(db, account)
+    date_of_birth: str | None = None,
+    abha_number: str | None = None,
+    abha_address: str | None = None,
+) -> list[dict[str, Any]]:
+    conditions = _duplicate_match_conditions(
+        phone=phone,
+        first_name=first_name,
+        last_name=last_name,
+        date_of_birth=date_of_birth,
+        abha_number=abha_number,
+        abha_address=abha_address,
+    )
+    if not conditions:
+        return []
     query = (
         select(Patient, Person)
         .join(
@@ -503,24 +678,59 @@ async def duplicate_patients(
             ),
         )
         .where(
-            Patient.organization_id == organization.id,
+            Patient.organization_id == organization_id,
             Patient.is_active.is_(True),
+            or_(*conditions),
         )
+        .order_by(Patient.created_at.asc(), Patient.id.asc())
+        .limit(DUPLICATE_MATCH_LIMIT)
     )
-    if phone:
-        phone_variants = _phone_search_variants(phone)
-        query = query.where(Person.phone.in_(phone_variants))
-    if first_name:
-        escaped_fn = _escape_like(first_name.strip())
-        query = query.where(Person.first_name.ilike(escaped_fn, escape="\\"))
-    if last_name:
-        escaped_ln = _escape_like(last_name.strip())
-        query = query.where(Person.last_name.ilike(escaped_ln, escape="\\"))
-    rows = (await db.execute(query.limit(20))).all()
+    rows = (await db.execute(query)).all()
+    items: list[dict[str, Any]] = []
+    for patient, person in rows:
+        item = _item(patient, person)
+        item["match_reason"] = _duplicate_match_reason(
+            person,
+            phone=phone,
+            first_name=first_name,
+            last_name=last_name,
+            date_of_birth=date_of_birth,
+            abha_number=abha_number,
+            abha_address=abha_address,
+        )
+        items.append(item)
+    return items
+
+
+@router.get("/duplicates")
+async def duplicate_patients(
+    phone: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    date_of_birth: str | None = None,
+    abha_number: str | None = None,
+    abha_address: str | None = None,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)] = ...,
+    db: Annotated[AsyncSession, Depends(async_get_db)] = ...,
+) -> dict[str, Any]:
+    organization = await _org(db, account)
+    digits = re.sub(r"\D", "", abha_number) if abha_number else ""
+    normalized_abha_number = digits if len(digits) == ABHA_NUMBER_DIGITS else None
+    normalized_abha_address = abha_address.strip().lower() if abha_address and abha_address.strip() else None
+    items = await _duplicate_candidates(
+        db,
+        organization.id,
+        phone=phone,
+        first_name=first_name,
+        last_name=last_name,
+        date_of_birth=date_of_birth,
+        abha_number=normalized_abha_number,
+        abha_address=normalized_abha_address,
+    )
     return {
         "success": True,
-        "data": {"items": [_item(patient, person) for patient, person in rows]},
-        "meta": {"count": len(rows)},
+        "data": {"items": items},
+        "meta": {"count": len(items)},
     }
 
 
@@ -857,18 +1067,37 @@ async def create_patient(
 ) -> dict[str, Any]:
     organization = await _org(db, account)
     normalized = payload.normalized()
-    if normalized.phone:
-        existing = await db.scalar(
-            select(Person).where(
-                Person.organization_id == organization.id,
-                Person.phone == normalized.phone,
-            )
+    abha_number = _normalize_abha_number(normalized.abha_number)
+    abha_address = _normalize_abha_address(normalized.abha_address)
+    override_reason = (normalized.duplicate_override_reason or "").strip() or None
+
+    # Rerun duplicate review at commit time (TOCTOU mitigation): the frontend
+    # probe is not proof, only the authoritative check here is.
+    candidates = await _duplicate_candidates(
+        db,
+        organization.id,
+        phone=normalized.phone,
+        first_name=normalized.first_name,
+        last_name=normalized.last_name,
+        date_of_birth=normalized.date_of_birth,
+        abha_number=abha_number,
+        abha_address=abha_address,
+    )
+    blocking_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate.get("match_reason") in {"abha", "phone", "name_dob"}
+    ]
+    if blocking_candidates and not override_reason:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "POTENTIAL_DUPLICATE",
+                "message": "Possible existing patient records were found. Review the matches or record an override reason.",
+                "candidates": candidates,
+            },
         )
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A patient with this phone already exists.",
-            )
+
     salutation = await resolve_active_salutation(db, normalized.salutation_id)
     person = Person(
         organization_id=organization.id,
@@ -878,16 +1107,39 @@ async def create_patient(
         email=normalized.email,
         date_of_birth=normalized.date_of_birth,
         gender=normalized.gender,
+        abha_number=abha_number,
+        abha_address=abha_address,
         salutation_id=salutation.id if salutation else None,
     )
     db.add(person)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PATIENT_IDENTIFIER_CONFLICT",
+                "message": "A patient with this phone, ABHA number or ABHA address already exists.",
+            },
+        ) from exc
     patient = Patient(
         organization_id=organization.id,
         person_id=person.id,
         mrn=f"MRN-{secrets.token_hex(5).upper()}",
     )
     db.add(patient)
+    await db.flush()
+    audit_details = None
+    if override_reason and blocking_candidates:
+        audit_details = {
+            "duplicate_override": True,
+            "duplicate_override_reason": override_reason,
+            "matched_patients": [
+                {"uuid": candidate["uuid"], "match_reason": candidate["match_reason"]}
+                for candidate in blocking_candidates
+            ],
+        }
     await record_audit(
         db,
         organization_id=organization.id,
@@ -895,9 +1147,121 @@ async def create_patient(
         action="patient.created",
         resource_type="patient",
         resource_id=patient.id,
+        details=audit_details,
     )
     await db.commit()
     return {"success": True, "data": _item(patient, person), "meta": {}}
+
+
+@router.get("/recently-viewed")
+async def recently_viewed_patients(
+    limit: int = Query(default=20, ge=1, le=50),
+    account: Annotated[UserAccount, Depends(get_current_identity_account)] = ...,
+    db: Annotated[AsyncSession, Depends(async_get_db)] = ...,
+) -> dict[str, Any]:
+    organization = await _org(db, account)
+    query = (
+        select(Patient, Person, PatientView.last_viewed_at, PatientView.facility_id)
+        .join(
+            PatientView,
+            and_(
+                PatientView.patient_id == Patient.id,
+                PatientView.organization_id == Patient.organization_id,
+            ),
+        )
+        .join(
+            Person,
+            and_(
+                Person.id == Patient.person_id,
+                Person.organization_id == Patient.organization_id,
+            ),
+        )
+        .where(
+            PatientView.organization_id == organization.id,
+            PatientView.user_account_id == account.id,
+            Patient.is_active.is_(True),
+        )
+        .order_by(PatientView.last_viewed_at.desc(), Patient.id.asc())
+        .limit(limit)
+    )
+    rows = (await db.execute(query)).all()
+    items: list[dict[str, Any]] = []
+    for patient, person, viewed_at, facility_id in rows:
+        item = _item(patient, person)
+        item["viewed_at"] = viewed_at.isoformat() if viewed_at else None
+        item["last_viewed_facility_uuid"] = str(facility_id) if facility_id else None
+        items.append(item)
+    return {"success": True, "data": {"items": items}, "meta": {"count": len(items)}}
+
+
+@router.post("/{patient_uuid}/view")
+async def record_patient_view(
+    patient_uuid: UUID,
+    payload: PatientViewRequest,
+    account: Annotated[UserAccount, Depends(get_current_identity_account)],
+    db: Annotated[AsyncSession, Depends(async_get_db)],
+) -> dict[str, Any]:
+    organization = await _org(db, account)
+    patient = await db.scalar(
+        select(Patient).where(
+            Patient.id == patient_uuid,
+            Patient.organization_id == organization.id,
+            Patient.is_active.is_(True),
+        )
+    )
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found.")
+    facility_id = payload.facility_uuid
+    if facility_id is not None:
+        await _scope(db, account, facility_id)
+    now = datetime.now(UTC)
+    view = await db.scalar(
+        select(PatientView).where(
+            PatientView.user_account_id == account.id,
+            PatientView.patient_id == patient.id,
+        )
+    )
+    if view is None:
+        view = PatientView(
+            organization_id=organization.id,
+            user_account_id=account.id,
+            patient_id=patient.id,
+            facility_id=facility_id,
+            last_viewed_at=now,
+        )
+        db.add(view)
+    else:
+        view.organization_id = organization.id
+        view.last_viewed_at = now
+        if facility_id is not None:
+            view.facility_id = facility_id
+    await record_audit(
+        db,
+        organization_id=organization.id,
+        actor_user_id=account.id,
+        action="patient.viewed",
+        resource_type="patient",
+        resource_id=patient.id,
+        facility_id=facility_id,
+        patient_id=patient.id,
+    )
+    await db.commit()
+    await publish(
+        make_event(
+            "patient.viewed",
+            entity_id=patient.id,
+            entity_version=None,
+            organization_id=organization.id,
+            facility_id=facility_id,
+            target_user_id=account.id,
+            new={"patient_uuid": str(patient.id)},
+        )
+    )
+    return {
+        "success": True,
+        "data": {"patient_uuid": str(patient.id), "viewed_at": now.isoformat()},
+        "meta": {},
+    }
 
 
 @router.get("/{patient_uuid}")
@@ -956,6 +1320,48 @@ async def update_patient(
         raise HTTPException(status_code=404, detail="Patient not found.")
     _, person = result
     normalized = payload.normalized()
+    abha_number = _normalize_abha_number(normalized.abha_number)
+    abha_address = _normalize_abha_address(normalized.abha_address)
+    conflicts: list[str] = []
+    if normalized.phone:
+        duplicate_phone = await db.scalar(
+            select(Person.id).where(
+                Person.organization_id == organization.id,
+                Person.phone == normalized.phone,
+                Person.id != person.id,
+            )
+        )
+        if duplicate_phone is not None:
+            conflicts.append("phone")
+    if abha_number:
+        duplicate_abha_number = await db.scalar(
+            select(Person.id).where(
+                Person.organization_id == organization.id,
+                Person.abha_number == abha_number,
+                Person.id != person.id,
+            )
+        )
+        if duplicate_abha_number is not None:
+            conflicts.append("abha_number")
+    if abha_address:
+        duplicate_abha_address = await db.scalar(
+            select(Person.id).where(
+                Person.organization_id == organization.id,
+                func.lower(Person.abha_address) == abha_address,
+                Person.id != person.id,
+            )
+        )
+        if duplicate_abha_address is not None:
+            conflicts.append("abha_address")
+    if conflicts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PATIENT_IDENTIFIER_CONFLICT",
+                "message": "Another patient already uses this phone or ABHA identifier.",
+                "fields": conflicts,
+            },
+        )
     person.first_name, person.last_name, person.phone, person.email = (
         normalized.first_name,
         normalized.last_name,
@@ -966,6 +1372,8 @@ async def update_patient(
         normalized.date_of_birth,
         normalized.gender,
     )
+    person.abha_number = abha_number
+    person.abha_address = abha_address
     if "salutation_id" in normalized.model_fields_set:
         salutation = await resolve_active_salutation(db, normalized.salutation_id)
         person.salutation_id = salutation.id if salutation else None
@@ -977,7 +1385,17 @@ async def update_patient(
         resource_type="patient",
         resource_id=patient_uuid,
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "PATIENT_IDENTIFIER_CONFLICT",
+                "message": "A patient with this phone, ABHA number or ABHA address already exists.",
+            },
+        ) from exc
     return {"success": True, "data": _item(*result), "meta": {}}
 
 
