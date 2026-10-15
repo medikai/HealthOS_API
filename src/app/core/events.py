@@ -54,8 +54,9 @@ def make_event(
     entity_id: UUID | str,
     entity_version: int | None,
     organization_id: UUID | str,
-    facility_id: UUID | str,
+    facility_id: UUID | str | None = None,
     practitioner_id: UUID | str | None = None,
+    target_user_id: UUID | str | None = None,
     old: dict[str, Any] | None = None,
     new: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -66,8 +67,9 @@ def make_event(
         "entity_id": str(entity_id),
         "entity_version": entity_version,
         "organization_id": str(organization_id),
-        "facility_id": str(facility_id),
+        "facility_id": str(facility_id) if facility_id else None,
         "practitioner_id": str(practitioner_id) if practitioner_id else None,
+        "target_user_id": str(target_user_id) if target_user_id else None,
         "old": {k: _json_value(v) for k, v in (old or {}).items()},
         "new": {k: _json_value(v) for k, v in (new or {}).items()},
     }

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -1131,6 +1131,10 @@ async def list_appointments(
     status_filter: str | None = Query(default=None, alias="status"),
     patient_uuid: UUID | None = None,
     order: str = Query(default="asc", pattern="^(asc|desc)$"),
+    from_datetime: datetime | None = Query(default=None, alias="from"),
+    to_datetime: datetime | None = Query(default=None, alias="to"),
+    limit: int | None = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     if facility_uuid and str(facility_uuid).lower() != "all":
         await _scope(db, account, facility_uuid)
@@ -1141,17 +1145,40 @@ async def list_appointments(
         query = query.where(Appointment.status == status_filter)
     if patient_uuid:
         query = query.where(Appointment.patient_id == patient_uuid)
+    from_val = from_datetime if isinstance(from_datetime, datetime) else None
+    to_val = to_datetime if isinstance(to_datetime, datetime) else None
+    if from_val is not None:
+        if from_val.tzinfo is None:
+            from_val = from_val.replace(tzinfo=UTC)
+        query = query.where(Appointment.scheduled_start >= from_val)
+    if to_val is not None:
+        if to_val.tzinfo is None:
+            to_val = to_val.replace(tzinfo=UTC)
+        query = query.where(Appointment.scheduled_start < to_val)
     order_val = order if isinstance(order, str) else getattr(order, "default", "asc")
     order_clause = (
         Appointment.scheduled_start.desc()
         if str(order_val).lower() == "desc"
         else Appointment.scheduled_start.asc()
     )
-    rows = (await db.execute(query.order_by(order_clause))).all()
+    query = query.order_by(order_clause)
+    limit_val = limit if isinstance(limit, int) else None
+    has_more = False
+    if limit_val is not None:
+        query = query.offset(offset).limit(limit_val + 1)
+    rows = (await db.execute(query)).all()
+    if limit_val is not None:
+        has_more = len(rows) > limit_val
+        rows = rows[:limit_val]
     return {
         "success": True,
         "data": {"items": [appointment_view(*row) for row in rows]},
-        "meta": {"count": len(rows)},
+        "meta": {
+            "count": len(rows),
+            "limit": limit_val,
+            "offset": offset if limit_val is not None else None,
+            "has_more": has_more,
+        },
     }
 
 

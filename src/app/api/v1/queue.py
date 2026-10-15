@@ -10,6 +10,7 @@ from ...api.dependencies import get_current_identity_account
 from ...core.appointment_views import patient_view, practitioner_view
 from ...core.db.database import async_get_db
 from ...core.events import make_event, publish
+from ...core.timezones import to_timezone
 from ...domains.communication.notifications.workflow import (
     emit_queue_ready,
     emit_queue_token_assigned,
@@ -20,7 +21,7 @@ from ...models.identity import Patient, Person, UserAccount
 from ...models.organization import StaffAssignment, StaffMember
 from ...schemas.queue import WalkInCreate
 from .bootstrap import ADMIN_ROLES, _staff_context
-from .scheduling import _scope
+from .scheduling import _facility_timezone, _scope
 
 router = APIRouter(tags=["queue"])
 ACTIVE_QUEUE_STATUSES = {"waiting", "called", "skipped", "in_consultation"}
@@ -209,6 +210,18 @@ async def create_walk_in(
         )
     )
     if entry is not None:
+        await record_audit(
+            db,
+            organization_id=organization.id,
+            actor_user_id=account.id,
+            action="queue.walk_in_created",
+            resource_type="queue_entry",
+            resource_id=entry.id,
+            facility_id=entry.facility_id,
+            patient_id=entry.patient_id,
+            details={"reused": True, "token_number": entry.token_number},
+        )
+        await db.commit()
         return {
             "success": True,
             "data": {"queue_entry": await _walk_in_item(db, entry)},
@@ -226,6 +239,17 @@ async def create_walk_in(
     )
     db.add(entry)
     await db.flush()
+    await record_audit(
+        db,
+        organization_id=organization.id,
+        actor_user_id=account.id,
+        action="queue.walk_in_created",
+        resource_type="queue_entry",
+        resource_id=entry.id,
+        facility_id=entry.facility_id,
+        patient_id=entry.patient_id,
+        details={"reused": False, "token_number": entry.token_number},
+    )
     await emit_queue_token_assigned(db, entry=entry, actor_user_id=account.id)
     await db.commit()
     await publish(make_event(
@@ -361,19 +385,45 @@ async def check_in(
     if appointment is None:
         raise HTTPException(status_code=404, detail="Appointment not found.")
     await _scope(db, account, appointment.facility_id)
+
+    # Only appointments scheduled for today (facility timezone) can be checked
+    # in; this prevents pre-check-in of future visits and stale-day token reuse.
+    tz = await _facility_timezone(db, appointment.facility_id)
+    facility_today = to_timezone(datetime.now(UTC), tz).date()
+    appointment_day = to_timezone(appointment.scheduled_start, tz).date()
+    if appointment_day != facility_today:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "APPOINTMENT_NOT_TODAY",
+                "message": "Only appointments scheduled for today can be checked in.",
+                "details": [
+                    {
+                        "scheduled_start": appointment.scheduled_start.isoformat(),
+                        "facility_timezone": tz.key,
+                        "facility_date": facility_today.isoformat(),
+                    }
+                ],
+            },
+        )
+
     if appointment.status not in {"booked", "confirmed", "checked_in"}:
         raise HTTPException(
             status_code=409,
             detail="Appointment cannot be checked in from its current state.",
         )
+    today = date.today()
     entry = await db.scalar(
-        select(QueueEntry).where(QueueEntry.appointment_id == appointment.id)
+        select(QueueEntry).where(
+            QueueEntry.appointment_id == appointment.id,
+            QueueEntry.queue_date == today,
+            QueueEntry.status.in_(ACTIVE_QUEUE_STATUSES),
+        )
     )
     reused = entry is not None
     if reused and appointment.status == "checked_in":
         return {"success": True, "data": _item(entry), "meta": {"reused": True}}
     if entry is None:
-        today = date.today()
         entry = QueueEntry(
             organization_id=appointment.organization_id,
             facility_id=appointment.facility_id,
@@ -390,6 +440,17 @@ async def check_in(
     appointment.status = "checked_in"
     appointment.version += 1
     await db.flush()
+    await record_audit(
+        db,
+        organization_id=appointment.organization_id,
+        actor_user_id=account.id,
+        action="appointment.checked_in",
+        resource_type="appointment",
+        resource_id=appointment.id,
+        facility_id=appointment.facility_id,
+        patient_id=appointment.patient_id,
+        details={"queue_entry_id": str(entry.id), "reused": reused},
+    )
     await emit_queue_token_assigned(db, entry=entry, actor_user_id=account.id)
     await db.commit()
     await publish(make_event(

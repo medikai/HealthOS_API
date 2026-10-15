@@ -473,6 +473,28 @@ class AuditLog(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC), index=True)
 
 
+class PatientView(Base):
+    """Per-operator recently-viewed patient history.
+
+    Stores only the most recent access per (operator, patient); the full audit
+    trail for every view lives in ``governance.audit_log``.
+    """
+
+    __tablename__ = "patient_view"
+    __table_args__ = (
+        UniqueConstraint("user_account_id", "patient_id", name="uq_governance_patient_view_user_patient"),
+        Index("ix_governance_patient_view_user_recent", "user_account_id", "last_viewed_at"),
+        {"schema": "governance"},
+    )
+
+    id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
+    organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
+    user_account_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.user_account.id"), index=True)
+    patient_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("identity.patient.id"), index=True)
+    facility_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("organization.facility.id"), default=None, index=True)
+    last_viewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
+
+
 class ClinicalDocumentationSetting(Base):
     __tablename__ = "clinical_documentation_setting"
     __table_args__ = (

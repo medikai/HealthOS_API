@@ -68,6 +68,27 @@ def _frame(event_name: str, payload: dict, event_id: str | None = None) -> str:
     return f"{prefix}event: {event_name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+def _matches_scope(event: dict, scope: dict) -> bool:
+    """Decide whether an invalidation event is visible to a stream subscriber.
+
+    Account-targeted events (e.g. ``patient.viewed`` for cross-device recently
+    viewed) bypass the facility/practitioner filters but stay organization and
+    account scoped; they never carry patient PII in the payload.
+    """
+    if event.get("organization_id") != str(scope["organization_id"]):
+        return False
+    target_user_id = event.get("target_user_id")
+    if target_user_id:
+        return str(target_user_id) == str(scope["account_id"])
+    facility_id = event.get("facility_id")
+    if not facility_id:
+        return False
+    if UUID(facility_id) not in scope["facilities"]:
+        return False
+    practitioner_filter = scope["practitioner_id"]
+    return practitioner_filter is None or event.get("practitioner_id") in {None, str(practitioner_filter)}
+
+
 @router.get("/events/stream")
 async def stream(
     request: Request,
@@ -92,11 +113,7 @@ async def stream(
                     break
                 yield ": heartbeat\n\n"
                 continue
-            if event.get("organization_id") != str(scope["organization_id"]):
-                continue
-            if UUID(event["facility_id"]) not in scope["facilities"]:
-                continue
-            if scope["practitioner_id"] and event.get("practitioner_id") not in {None, str(scope["practitioner_id"])}:
+            if not _matches_scope(event, scope):
                 continue
             yield _frame(event["event_type"], event, event["event_id"])
 

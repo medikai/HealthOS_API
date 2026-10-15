@@ -98,7 +98,24 @@ class AuthSession(Base):
 
 class Person(Base):
     __tablename__ = "person"
-    __table_args__ = (UniqueConstraint("organization_id", "phone", name="uq_identity_person_org_phone"), {"schema": "identity"})
+    __table_args__ = (
+        UniqueConstraint("organization_id", "phone", name="uq_identity_person_org_phone"),
+        Index(
+            "uq_identity_person_org_abha_number",
+            "organization_id",
+            "abha_number",
+            unique=True,
+            postgresql_where=text("abha_number IS NOT NULL"),
+        ),
+        Index(
+            "uq_identity_person_org_abha_address",
+            "organization_id",
+            text("lower(abha_address)"),
+            unique=True,
+            postgresql_where=text("abha_address IS NOT NULL"),
+        ),
+        {"schema": "identity"},
+    )
 
     id: Mapped[uuid_pkg.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default_factory=uuid7, init=False)
     organization_id: Mapped[uuid_pkg.UUID] = mapped_column(ForeignKey("organization.organization.id"), index=True)
@@ -108,6 +125,8 @@ class Person(Base):
     email: Mapped[str | None] = mapped_column(String(320), default=None)
     date_of_birth: Mapped[str | None] = mapped_column(String(10), default=None)
     gender: Mapped[str | None] = mapped_column(String(32), default=None)
+    abha_number: Mapped[str | None] = mapped_column(String(14), default=None)
+    abha_address: Mapped[str | None] = mapped_column(String(64), default=None)
     salutation_id: Mapped[uuid_pkg.UUID | None] = mapped_column(ForeignKey("identity.salutation.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default_factory=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
